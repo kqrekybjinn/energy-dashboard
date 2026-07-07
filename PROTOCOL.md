@@ -210,7 +210,7 @@ while True:
 |----|-----|
 | API 地址 | `https://w0378faf.ala.cn-shenzhen.emqxsl.cn:8443/api/v5` |
 | WSS 地址 | `wss://w0378faf.ala.cn-shenzhen.emqxsl.cn:8084/mqtt` |
-| MQTTS 地址 | `mqtts://w0378faf.ala.cn-shenzhen.emqxsl.cn:8883`（网关用） |
+| MQTT 用户 | `rk3506`（Dashboard 默认） |
 
 1. 打开 https://cloud.emqx.com/ → 注册 → 创建 **Serverless** 部署
 2. 区域选 `ap-southeast-1`（与 Supabase 同区，延迟最低）

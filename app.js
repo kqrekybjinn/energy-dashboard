@@ -41,8 +41,8 @@ const state = {
   // MQTT config (persisted)
   mqtt: {
     brokerUrl: loadMqttConfig().brokerUrl || "wss://w0378faf.ala.cn-shenzhen.emqxsl.cn:8084/mqtt",
-    deviceId: loadMqttConfig().deviceId || "efd8e316",
-    username: loadMqttConfig().username || "efd8e316",
+    deviceId: loadMqttConfig().deviceId || "rk3506",
+    username: loadMqttConfig().username || "rk3506",
     password: loadMqttConfig().password || "",
   },
   // MQTT connection status
