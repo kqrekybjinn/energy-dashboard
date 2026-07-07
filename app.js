@@ -40,7 +40,7 @@ const state = {
   chartMode: "wave", // "wave" | "raw"
   // MQTT config (persisted)
   mqtt: {
-    brokerUrl: loadMqttConfig().brokerUrl || "wss://broker.emqx.io:8084/mqtt",
+    brokerUrl: loadMqttConfig().brokerUrl || "wss://w0378faf.ala.cn-shenzhen.emqxsl.cn:8084/mqtt",
     deviceId: loadMqttConfig().deviceId || "",
     username: loadMqttConfig().username || "",
     password: loadMqttConfig().password || "",
