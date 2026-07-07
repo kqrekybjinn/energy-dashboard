@@ -19,6 +19,7 @@
   --good-bg: #dcfce7;
   --danger: #dc2626;
   --danger-hover: #b91c1c;
+  --pwm-track-bg: #e5e7eb;
 }
 
 html, body {
@@ -33,7 +34,7 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100dvh;
-  max-width: 800px;
+  max-width: 1200px;
   margin: 0 auto;
 }
 
@@ -43,7 +44,9 @@ html, body {
   padding: 16px;
 }
 
-/* --- Tab bar --- */
+/* ============================================================
+   Tab bar
+   ============================================================ */
 
 .tabbar {
   display: flex;
@@ -75,7 +78,9 @@ html, body {
   font-size: 1.25rem;
 }
 
-/* --- Panel --- */
+/* ============================================================
+   Panel
+   ============================================================ */
 
 .panel {
   background: var(--bg);
@@ -86,8 +91,9 @@ html, body {
 }
 
 h2 {
-  font-size: 1.25rem;
+  font-size: 1.1rem;
   font-weight: 600;
+  margin-bottom: 10px;
 }
 
 .subtle {
@@ -96,7 +102,9 @@ h2 {
   margin-top: 4px;
 }
 
-/* --- Toast --- */
+/* ============================================================
+   Toast
+   ============================================================ */
 
 .toast {
   position: fixed;
@@ -118,7 +126,9 @@ h2 {
   opacity: 1;
 }
 
-/* --- Buttons --- */
+/* ============================================================
+   Buttons
+   ============================================================ */
 
 .button {
   display: inline-flex;
@@ -144,6 +154,11 @@ h2 {
   transform: scale(0.97);
 }
 
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .danger-button {
   display: inline-flex;
   align-items: center;
@@ -164,7 +179,381 @@ h2 {
   color: #fff;
 }
 
-/* --- Account hero --- */
+.small-button {
+  padding: 6px 14px;
+  font-size: 0.8125rem;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   Dashboard grid
+   ============================================================ */
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.dash-left {
+  display: flex;
+  flex-direction: column;
+}
+
+.dash-right {
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+}
+
+/* ============================================================
+   Status grid
+   ============================================================ */
+
+.status-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.status-item {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px;
+  background: var(--bg-alt);
+  border-radius: var(--radius);
+  gap: 2px;
+}
+
+.status-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.status-value {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.status-value.good { color: var(--good); }
+.status-value.danger { color: var(--danger); }
+
+/* ============================================================
+   PWM bars
+   ============================================================ */
+
+.pwm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pwm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pwm-label {
+  width: 50px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.pwm-track {
+  flex: 1;
+  height: 18px;
+  background: var(--pwm-track-bg);
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.pwm-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #2563eb);
+  border-radius: 9px;
+  transition: width 0.2s ease;
+  min-width: 0;
+}
+
+.pwm-value {
+  width: 36px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   Metrics cards
+   ============================================================ */
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.metric-card {
+  padding: 10px 12px;
+  background: var(--bg-alt);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.metric-card.wide {
+  grid-column: span 2;
+}
+
+.metric-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.metric-value {
+  font-size: 1.125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-value small {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* ============================================================
+   Form
+   ============================================================ */
+
+.form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.field input, .field select {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 0.9375rem;
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--bg);
+  transition: border-color 0.15s;
+}
+
+.field input:focus, .field select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.field input:disabled {
+  background: var(--bg-alt);
+  color: var(--text-muted);
+}
+
+.field-row {
+  display: flex;
+  gap: 8px;
+}
+
+.field-row .field { flex: 1; }
+.field-sm { max-width: 100px; flex-shrink: 0; }
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+/* ============================================================
+   Calibration
+   ============================================================ */
+
+.calib-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calib-label {
+  font-size: 0.8125rem;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+}
+
+.calib-input {
+  width: 110px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-family: var(--font);
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.calib-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+/* ============================================================
+   Functions
+   ============================================================ */
+
+.func-grid {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.command-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.command-row input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-family: var(--font);
+}
+
+.command-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ============================================================
+   Chart panel
+   ============================================================ */
+
+.chart-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.chart-toolbar h2 { margin-bottom: 0; }
+
+.chart-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.tab-pill {
+  padding: 4px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: none;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tab-pill.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.wave-container {
+  width: 100%;
+  height: 380px;
+  position: relative;
+}
+
+.wave-container canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.legend-item input { cursor: pointer; }
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   Raw console
+   ============================================================ */
+
+.raw-console {
+  background: #0a0a0a;
+  color: #e5e5e5;
+  padding: 12px;
+  border-radius: var(--radius);
+  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  font-size: 0.8125rem;
+  height: 400px;
+  overflow-y: auto;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.raw-line {
+  padding: 1px 0;
+}
+
+/* ============================================================
+   Account hero
+   ============================================================ */
 
 .account-hero {
   display: flex;
@@ -193,7 +582,9 @@ h2 {
   flex-shrink: 0;
 }
 
-/* --- Type pill / badge --- */
+/* ============================================================
+   Type pill / badge
+   ============================================================ */
 
 .type-pill {
   display: inline-block;
@@ -211,12 +602,13 @@ h2 {
   color: var(--good);
 }
 
-/* --- Setting list --- */
+/* ============================================================
+   Setting list
+   ============================================================ */
 
 .setting-list {
   display: flex;
   flex-direction: column;
-  gap: 0;
 }
 
 .setting-row {
@@ -236,50 +628,9 @@ h2 {
   font-size: 0.9375rem;
 }
 
-/* --- Form --- */
-
-.form-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.field label {
-  font-size: 0.8125rem;
-  font-weight: 500;
-  color: var(--text-muted);
-}
-
-.field input {
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  font-size: 0.9375rem;
-  font-family: var(--font);
-  color: var(--text);
-  background: var(--bg);
-  transition: border-color 0.15s;
-}
-
-.field input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-dim);
-}
-
-.actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-/* --- Version card --- */
+/* ============================================================
+   Version card
+   ============================================================ */
 
 .version-card {
   display: flex;
@@ -302,8 +653,20 @@ h2 {
   margin-top: 2px;
 }
 
-.small-button {
-  padding: 6px 14px;
-  font-size: 0.8125rem;
-  flex-shrink: 0;
+/* ============================================================
+   Responsive
+   ============================================================ */
+
+@media (max-width: 860px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dash-right {
+    position: static;
+  }
+
+  .app-shell {
+    max-width: 100%;
+  }
 }
