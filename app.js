@@ -174,10 +174,10 @@ function renderDashboard() {
   view.innerHTML = `
     <div class="dashboard-grid">
       <div class="dash-left">
+        ${renderDeviceBar()}
         ${renderStatusPanel()}
         ${renderPwmPanel()}
         ${renderMetricsPanel()}
-        ${renderConnectionPanel()}
         ${renderCalibrationPanel()}
         ${renderFunctionsPanel()}
       </div>
@@ -187,6 +187,30 @@ function renderDashboard() {
     </div>
   `;
   if (state.chartMode === "wave" && state.streaming) initChart();
+}
+
+function renderDeviceBar() {
+  const dot = state.deviceConnected
+    ? '<span class="conn-dot on"></span>'
+    : '<span class="conn-dot"></span>';
+  const label = state.deviceConnected
+    ? (state.sourceMode === "mqtt" ? `MQTT · ${escapeHtml(state.mqtt.deviceId)}` : "模拟数据")
+    : "未连接";
+  const btnLabel = state.streaming ? "⏹" : state.deviceConnected ? "▶" : "连接";
+  const btnAction = state.streaming ? "stream-toggle" : state.deviceConnected ? "stream-toggle" : "device-connect";
+
+  return `
+    <section class="panel device-bar">
+      <div class="device-bar-left">
+        ${dot}
+        <span class="device-bar-label">${label}</span>
+      </div>
+      <div class="device-bar-right">
+        ${state.deviceConnected ? `<span class="device-bar-samples">${state.sampleCount} 点</span>` : ""}
+        <button class="button small-button" type="button" data-action="${btnAction}">${btnLabel}</button>
+      </div>
+    </section>
+  `;
 }
 
 function renderStatusPanel() {
@@ -287,7 +311,7 @@ function renderMetricsPanel() {
 //  Connection panel — 双模式：模拟 / MQTT
 // ============================================================
 
-function renderConnectionPanel() {
+function renderDeviceConfigPanel() {
   const btnLabel = state.deviceConnected ? "断开连接" : "连接设备";
   const btnClass = state.deviceConnected ? "danger-button" : "button";
 
@@ -309,7 +333,7 @@ function renderConnectionPanel() {
 
       <div class="actions">
         <button class="${btnClass}" type="button" data-action="device-connect">${btnLabel}</button>
-        ${state.streaming ? `<button class="button" type="button" data-action="stream-toggle">⏹ 停止</button>` : `<button class="button" type="button" data-action="stream-toggle" ${!state.deviceConnected ? "disabled" : ""}>▶ 开始采集</button>`}
+        ${state.streaming ? `<button class="button" type="button" data-action="stream-toggle">⏹ 停止采集</button>` : `<button class="button" type="button" data-action="stream-toggle" ${!state.deviceConnected ? "disabled" : ""}>▶ 开始采集</button>`}
       </div>
     </section>
   `;
@@ -751,6 +775,7 @@ function renderData() {
 
 function renderSettings() {
   view.innerHTML = `
+    ${renderDeviceConfigPanel()}
     ${renderAccountHero()}
     ${renderAccountPanel()}
     ${renderProfileForm()}

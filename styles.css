@@ -209,6 +209,53 @@ h2 {
 }
 
 /* ============================================================
+   Device bar (dashboard top)
+   ============================================================ */
+
+.device-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+}
+
+.device-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.device-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.device-bar-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.device-bar-samples {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.conn-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #cbd5e1;
+  flex-shrink: 0;
+}
+
+.conn-dot.on {
+  background: var(--good);
+  box-shadow: 0 0 6px rgba(22, 163, 74, 0.5);
+}
+
+/* ============================================================
    Status grid
    ============================================================ */
 
