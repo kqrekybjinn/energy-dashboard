@@ -654,6 +654,68 @@ h2 {
 }
 
 /* ============================================================
+   Source tabs (Sim / MQTT selector)
+   ============================================================ */
+
+.source-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+/* ============================================================
+   Sim notice
+   ============================================================ */
+
+.sim-notice {
+  padding: 10px 12px;
+  background: var(--bg-alt);
+  border-radius: var(--radius);
+  border: 1px dashed var(--line);
+}
+
+/* ============================================================
+   MQTT config
+   ============================================================ */
+
+.mqtt-config {
+  padding: 12px;
+  background: var(--bg-alt);
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+}
+
+.mqtt-topics {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+  font-size: 0.8125rem;
+}
+
+.mqtt-topics code {
+  padding: 1px 6px;
+  background: #e2e8f0;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  color: var(--accent);
+}
+
+.mqtt-status-row {
+  margin-top: 4px;
+}
+
+.mqtt-badge {
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.mqtt-badge.good { color: var(--good); }
+.mqtt-badge.warn { color: #d97706; }
+.mqtt-badge.danger { color: var(--danger); }
+
+/* ============================================================
    Responsive
    ============================================================ */
 
