@@ -194,56 +194,98 @@ while True:
 
 ---
 
-## 6. Broker 推荐
+## 6. Broker 部署
 
-本项目推荐 **EMQX**（自建 Docker 部署），已附带一键部署文件。
+采用两阶段方案：先上云验证，后迁自建。
 
-### 首选：EMQX（自建，Docker Compose）
+### 阶段 A：EMQX Cloud Serverless（当前，零运维验证）
 
-| 优势 | 说明 |
-|------|------|
-| CLI 管理 | `./broker-setup.sh` 全命令行操作，无需进 Dashboard |
-| WSS 原生 | `wss://<ip>:8084/mqtt` 浏览器直连 |
-| REST API | `http://<ip>:18083/api/v5` curl 脚本化管理 |
-| 热更新 | `emqx ctl conf reload` 不中断服务 |
-| 轻量 | 单节点 ~512MB RAM，Docker 秒级启动 |
+适用场景：开发调试、单设备验证、概念验证。免费额度 100 设备/月 1GB 流量。
 
-### 快速启动
+#### 创建步骤
+
+1. 打开 https://cloud.emqx.com/ → 注册 → 创建 **Serverless** 部署
+2. 区域选 `ap-southeast-1`（与 Supabase 同区，延迟最低）
+3. 创建完成后，在 **Authentication** 中添加用户：
+   ```
+   用户名: rk3506-gateway-001
+   密码:   <你设的密码>
+   ```
+4. 在 **Authorization** 中添加 ACL（可选）：
+   ```
+   rk3506-gateway-001 → energy/rk3506-gateway-001/telemetry → Publish
+   rk3506-gateway-001 → energy/rk3506-gateway-001/command   → Subscribe
+   ```
+5. 从 **Overview** 复制 WSS 地址，填入 Dashboard：
+   ```
+   Broker:  wss://<你的实例>.ala.ap-southeast-1.emqxsl.com:8084/mqtt
+   设备 ID: rk3506-gateway-001
+   用户名:  rk3506-gateway-001
+   密码:    <你设的密码>
+   ```
+
+#### EMQX Cloud API 管理（curl CLI）
 
 ```bash
-cd broker/
+# 查看客户端
+curl -s "https://<你的实例>.ala.ap-southeast-1.emqxsl.com/api/v5/clients" \
+  -u "<AppID>:<AppSecret>"
 
-# 启动
+# 查看订阅
+curl -s "https://<你的实例>.ala.ap-southeast-1.emqxsl.com/api/v5/subscriptions" \
+  -u "<AppID>:<AppSecret>"
+
+# 踢出客户端
+curl -s -X DELETE \
+  "https://<你的实例>.ala.ap-southeast-1.emqxsl.com/api/v5/clients/<clientid>" \
+  -u "<AppID>:<AppSecret>"
+```
+
+> AppID / AppSecret 在 EMQX Cloud Console → 部署 → API Access 中创建。
+
+### 阶段 B：自建 Docker（后续迁移，无限制）
+
+当免费额度不够或需要更低延迟时，迁移到自建 VPS。`broker/` 目录已准备好所有文件。
+
+#### 迁移步骤
+
+```bash
+# 1. 在 VPS 上一键启动
+cd broker/
 ./broker-setup.sh up
 
-# 创建设备用户
-./broker-setup.sh add-user rk3506-gateway-001 mypassword
+# 2. 创建相同的用户（或批量导入）
+./broker-setup.sh add-user rk3506-gateway-001 <密码>
 
-# 授权 telemetry 发布
+# 3. 授权
 ./broker-setup.sh grant rk3506-gateway-001 energy/rk3506-gateway-001/telemetry pub
-
-# 授权 command 订阅
 ./broker-setup.sh grant rk3506-gateway-001 energy/rk3506-gateway-001/command sub
 
-# 查看连接状态
-./broker-setup.sh clients
+# 4. 确认运行
+./broker-setup.sh info
 ```
 
-部署后 Dashboard 中 Broker 地址填：`wss://<服务器IP>:8084/mqtt`
+#### 迁移影响
 
-### 备选方案
-
-| Broker | WSS 地址 | 免费额度 | CLI |
-|--------|---------|---------|-----|
-| EMQX Cloud Serverless | `wss://{host}:8084/mqtt` | 100 设备 | REST API (curl) |
-| HiveMQ Cloud | `wss://{host}:8884/mqtt` | 100 设备 | REST API |
-| 自建 Mosquitto | `wss://{your-ip}:8084` | 无限 | `mosquitto_ctrl` |
-
-### 测试用公共 Broker
-
-开发测试可直接用 EMQX 公共沙箱（无认证，无持久化）：
 ```
-wss://broker.emqx.io:8084/mqtt
+阶段 A                           阶段 B
+EMQX Cloud Serverless    ──→    你的 VPS 上 Docker EMQX
+wss://xxx.ala...         ──→    wss://<你的IP>:8084/mqtt
 ```
 
-> ⚠️ 公共 Broker 数据全网可见，生产环境务必切换到自建部署。
+**Dashboard 只需改一个字符串**——把 Broker 地址从 EMQX Cloud 换成你的 VPS IP。  
+
+**RK3506 网关端同理**——改 `BROKER` 变量即可。Topic 和用户完全不变。
+
+#### 自建优势
+
+| 维度 | EMQX Cloud Serverless | 自建 Docker |
+|------|----------------------|-------------|
+| 延迟（国内 4G） | ~100-200ms（新加坡） | ~30-50ms（国内机房） |
+| 流量 | 1GB/月免费 | 无限 |
+| 设备数 | 100 | 不限 |
+| 离线消息持久化 | ❌ Serverless 不支持 | ✅ 磁盘队列 |
+| 数据本地化 | 新加坡 | 你自己的 VPS |
+| 运维 | 零 | `docker compose pull && up -d` |
+
+> 建议：阶段 A 跑通整条链路后，立刻切到阶段 B。EMQX Cloud Serverless 的 1GB 流量对实时遥测（5Hz × 6 通道 JSON）大约能撑 3-5 天持续运行。
