@@ -2,6 +2,8 @@ import { cloud, CLOUD_API_VERSION } from "./cloud.js";
 
 const DB_NAME = "energy-dashboard-db";
 const DB_VERSION = 1;
+const APP_VERSION_KEY = "energy-dashboard-app-version";
+const SW_CACHE_PREFIX = "energy-dashboard-";
 
 const state = {
   view: "dashboard",
@@ -9,6 +11,13 @@ const state = {
   cloudUser: null,
   cloudProfile: null,
   cloudReady: false,
+  appVersion: {
+    current: localStorage.getItem(APP_VERSION_KEY) || "",
+    latest: "",
+    checking: true,
+    updateAvailable: false,
+    error: "",
+  },
 };
 
 const view = document.querySelector("#view");
@@ -21,6 +30,8 @@ boot();
 async function boot() {
   bindGlobalEvents();
   await initCloud();
+  registerServiceWorker();
+  checkAppVersion();
   render();
 }
 
@@ -73,6 +84,9 @@ async function handleViewClick(event) {
   if (action === "save-profile") {
     await saveProfile();
   }
+  if (action === "refresh-app") {
+    await refreshAppAssets();
+  }
 }
 
 function render() {
@@ -108,6 +122,7 @@ function renderSettings() {
     ${renderAccountHero()}
     ${renderAccountPanel()}
     ${renderProfileForm()}
+    ${renderVersionPanel()}
   `;
 }
 
@@ -254,6 +269,94 @@ async function saveProfile() {
     console.error(error);
     showToast(`保存失败：${error.message || error}`);
   }
+}
+
+// --- Version ---
+
+function renderVersionPanel() {
+  const version = state.appVersion;
+  const label = version.current || version.latest || "未知";
+  const status = version.checking
+    ? "正在检查更新"
+    : version.updateAvailable
+      ? `发现新版本 ${version.latest}`
+      : version.error
+        ? "版本检查失败"
+        : "已是最新版本";
+
+  return `
+    <section class="panel version-card" aria-label="版本">
+      <div>
+        <span class="version-label">当前版本</span>
+        <strong>${escapeHtml(label)}</strong>
+        <p class="subtle">${escapeHtml(status)}</p>
+      </div>
+      ${version.updateAvailable ? `<button class="button small-button" type="button" data-action="refresh-app">立即更新</button>` : ""}
+    </section>
+  `;
+}
+
+async function checkAppVersion() {
+  state.appVersion.checking = true;
+  state.appVersion.error = "";
+  rerenderVersion();
+  try {
+    const response = await fetch(`./version.json?t=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`version.json ${response.status}`);
+    const manifest = await response.json();
+    const latest = String(manifest.version || "").trim();
+    if (!latest) throw new Error("version.json 缺少 version 字段");
+    const current = localStorage.getItem(APP_VERSION_KEY) || "";
+    if (!current) {
+      localStorage.setItem(APP_VERSION_KEY, latest);
+      state.appVersion.current = latest;
+      state.appVersion.latest = latest;
+      state.appVersion.updateAvailable = false;
+    } else {
+      state.appVersion.current = current;
+      state.appVersion.latest = latest;
+      state.appVersion.updateAvailable = current !== latest;
+    }
+  } catch (error) {
+    console.warn("版本检查失败", error);
+    state.appVersion.error = error.message || "无法读取版本信息";
+  } finally {
+    state.appVersion.checking = false;
+    rerenderVersion();
+  }
+}
+
+function rerenderVersion() {
+  if (state.view === "settings") render();
+}
+
+async function refreshAppAssets() {
+  const latest = state.appVersion.latest;
+  try {
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys.filter((key) => key.startsWith(SW_CACHE_PREFIX)).map((key) => caches.delete(key)),
+      );
+    }
+    if ("serviceWorker" in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((registration) => registration.unregister()));
+    }
+    if (latest) localStorage.setItem(APP_VERSION_KEY, latest);
+    showToast("正在更新应用");
+    window.setTimeout(() => window.location.reload(), 300);
+  } catch (error) {
+    console.error("更新失败", error);
+    showToast("更新失败，请稍后重试");
+  }
+}
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  navigator.serviceWorker.register("./sw.js").catch((error) => {
+    console.warn("Service worker registration failed", error);
+  });
 }
 
 // --- Utilities ---

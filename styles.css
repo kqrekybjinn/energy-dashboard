@@ -278,3 +278,32 @@ h2 {
   gap: 8px;
   flex-wrap: wrap;
 }
+
+/* --- Version card --- */
+
+.version-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.version-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.version-card strong {
+  display: block;
+  font-size: 0.9375rem;
+  margin-top: 2px;
+}
+
+.small-button {
+  padding: 6px 14px;
+  font-size: 0.8125rem;
+  flex-shrink: 0;
+}
