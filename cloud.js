@@ -41,12 +41,13 @@ function getCurrentUrl(locationLike) {
   return `${locationLike.origin}${pathname}`;
 }
 
-function buildOAuthSignInUrl(config, provider, locationLike = globalThis.location) {
+function buildOAuthSignInUrl(config, provider) {
   assertConfigured(config);
   if (!OAUTH_PROVIDERS.has(provider)) throw new Error("不支持的登录方式");
   const url = new URL(`${config.supabaseUrl}/auth/v1/authorize`);
   url.searchParams.set("provider", provider);
-  url.searchParams.set("redirect_to", getCurrentUrl(locationLike));
+  // Always use configured appUrl as redirect; fall back to current origin only if unset
+  url.searchParams.set("redirect_to", config.appUrl || getCurrentUrl(globalThis.location));
   return url.toString();
 }
 
