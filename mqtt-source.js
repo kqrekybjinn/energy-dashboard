@@ -1,274 +1,257 @@
-// ============================================================
-//  MQTT Source — 针能管理终端 MQTT 数据源
+// =============================================================================
+// mqtt-source.js  —  能源管理终端 MQTT 多通道数据源 v2
 //
-//  协议层抽象，暴露与模拟源一致的接口：
-//    { start(), stop(), onData(fn), sendCommand(cmd) }
-//
-//  对接 RK3506 网关时，网关按 PROTOCOL.md 定义的 JSON 载荷
-//  发布到对应 topic 即可。
-// ============================================================
+// 订阅 4 个节点 + system + voice + aggregate，汇总为统一数据帧。
+// =============================================================================
 
-export const MQTT_SOURCE_VERSION = 1;
+// ---- helpers ----------------------------------------------------------------
 
-const DEFAULT_TOPIC_PREFIX = "energy";
+function t(base, path) {
+  const b = base.replace(/\/$/, "");
+  return `${b}/${path.replace(/^\//, "")}`;
+}
 
-/**
- * createMqttSource(opts)
- *
- * opts.brokerUrl   — MQTT broker WSS 地址，如 "wss://broker.emqx.io:8084/mqtt"
- * opts.deviceId    — 设备/网关唯一 ID
- * opts.username    — (可选) broker 用户名
- * opts.password    — (可选) broker 密码
- * opts.topicPrefix — (可选) topic 前缀，默认 "energy"
- */
-export function createMqttSource(opts = {}) {
-  const brokerUrl = String(opts.brokerUrl || "").trim();
-  const deviceId = String(opts.deviceId || "").trim();
-  const username = String(opts.username || "").trim();
-  const password = String(opts.password || "").trim();
-  const topicPrefix = String(opts.topicPrefix || DEFAULT_TOPIC_PREFIX).replace(/\/$/, "");
+// ---- 空数据帧 ----------------------------------------------------------------
 
-  // MQTT client instance
+function emptyMPPT() {
+  return {
+    solar_voltage: 0, solar_current: 0, solar_power: 0,
+    battery_voltage: 0, battery_current: 0, battery_power: 0,
+    battery_soc: 0, battery_temp: 0,
+    charge_mode: "OFF", pwm_duty: 0, efficiency: 0, error_code: 0,
+  };
+}
+
+function emptyChannel(letter) {
+  return {
+    letter, enabled: false,
+    label: `通道 ${letter.toUpperCase()}`,
+    set_voltage: 0,
+    actual_voltage: 0, actual_current: 0, actual_power: 0,
+    temperature: 0, error_code: 0,
+  };
+}
+
+// ---- 字段标准化 ------------------------------------------------------------
+
+function normalizeMPPT(raw) {
+  return {
+    solar_voltage:  raw.solar_voltage  ?? raw.solarVin   ?? raw.vin_solar  ?? 0,
+    solar_current:  raw.solar_current  ?? raw.solarIin   ?? raw.iin_solar  ?? 0,
+    solar_power:    raw.solar_power    ?? raw.solarPin   ?? raw.pin_solar  ?? 0,
+    battery_voltage:raw.battery_voltage?? raw.batteryVout ?? raw.vout       ?? 0,
+    battery_current:raw.battery_current?? raw.batteryIout ?? raw.iout       ?? 0,
+    battery_power:  raw.battery_power  ?? raw.batteryPout?? raw.pout        ?? 0,
+    battery_soc:    raw.battery_soc    ?? raw.soc        ?? raw.SOC        ?? raw.batterySOC ?? 0,
+    battery_temp:   raw.battery_temp   ?? raw.temp       ?? raw.TEMP       ?? 0,
+    charge_mode:    raw.charge_mode    ?? raw.mode       ?? raw.chargeMode ?? "OFF",
+    pwm_duty:       raw.pwm_duty       ?? raw.duty       ?? raw.PWM        ?? 0,
+    efficiency:     raw.efficiency     ?? raw.eff        ?? 0,
+    error_code:     raw.error_code     ?? raw.error      ?? 0,
+    ts:             raw.ts ?? Date.now(),
+  };
+}
+
+function normalizeChannel(raw) {
+  return {
+    enabled:        raw.enabled        ?? raw.state     ?? raw.output    ?? false,
+    label:          raw.label          ?? raw.name      ?? "",
+    set_voltage:    raw.set_voltage    ?? raw.setV      ?? raw.target_voltage ?? 0,
+    actual_voltage: raw.actual_voltage ?? raw.voltage   ?? raw.Vout      ?? raw.v ?? 0,
+    actual_current: raw.actual_current ?? raw.current   ?? raw.Iout      ?? raw.i ?? 0,
+    actual_power:   raw.actual_power   ?? raw.power     ?? raw.Pout      ?? 0,
+    temperature:    raw.temperature    ?? raw.temp      ?? 0,
+    error_code:     raw.error_code     ?? raw.error     ?? 0,
+    ts:             raw.ts ?? Date.now(),
+  };
+}
+
+function normalizeSystem(raw) {
+  return {
+    cpu_pct:       raw.cpu_pct       ?? raw.cpu  ?? 0,
+    mem_mb:        raw.mem_mb        ?? raw.mem  ?? 0,
+    disk_mb:       raw.disk_mb       ?? raw.disk ?? 0,
+    signal_dbm:    raw.signal_dbm    ?? raw.signal ?? raw.rssi ?? 0,
+    network_type:  raw.network_type  ?? raw.net   ?? "LTE",
+    uptime_s:      raw.uptime_s      ?? raw.uptime ?? 0,
+    ts:            raw.ts ?? Date.now(),
+  };
+}
+
+// ---- 主类 ------------------------------------------------------------------
+
+export function createMQTTSource() {
   let client = null;
-  let running = false;
-  let dataCallback = null;
-  let statusCallback = null;
+  let deviceId = "";
+  let prefix = "energy";
   let reconnectTimer = null;
-  let reconnectAttempts = 0;
-  const MAX_RECONNECT_DELAY = 30_000; // 30s max backoff
+  let reconnectAttempt = 0;
+  let started = false;
+  let topics = [];
+  let onData = null;
+  let onStatus = null;
 
-  const TELEMETRY_TOPIC = `${topicPrefix}/${deviceId}/telemetry`;
-  const COMMAND_TOPIC = `${topicPrefix}/${deviceId}/command`;
+  const cache = {
+    mppt: emptyMPPT(),
+    channel_a: emptyChannel("a"),
+    channel_b: emptyChannel("b"),
+    channel_c: emptyChannel("c"),
+    system: { cpu_pct: 0, mem_mb: 0, disk_mb: 0, signal_dbm: 0, network_type: "LTE", uptime_s: 0 },
+    voice: null,
+    aggregate: null,
+  };
 
-  function log(level, ...args) {
-    if (statusCallback) {
-      statusCallback({ type: "log", level, message: args.join(" ") });
-    }
-    console[level]("[MQTT]", ...args);
+  function buildFrame() {
+    return {
+      mppt:       { ...cache.mppt },
+      channel_a:  { ...cache.channel_a },
+      channel_b:  { ...cache.channel_b },
+      channel_c:  { ...cache.channel_c },
+      system:     { ...cache.system },
+      voice:      cache.voice ? { ...cache.voice } : null,
+      aggregate:  cache.aggregate ? { ...cache.aggregate } : null,
+    };
   }
 
-  function statusChange(state, detail = "") {
-    if (statusCallback) {
-      statusCallback({ type: "status", state, detail });
+  function emitFrame() { if (onData) onData(buildFrame()); }
+
+  function dispatch(topic, payloadStr) {
+    let obj;
+    try { obj = JSON.parse(payloadStr); } catch (_) { return; }
+    if (!obj || typeof obj !== "object") return;
+
+    const rel = topic.replace(t(prefix, deviceId) + "/", "");
+
+    if (rel === "mppt/telemetry") {
+      cache.mppt = normalizeMPPT(obj);
+      emitFrame();
+    } else if (rel.startsWith("channel/") && rel.endsWith("/telemetry")) {
+      const ch = rel.slice("channel/".length, -"/telemetry".length);
+      const key = `channel_${ch}`;
+      if (cache[key] !== undefined) {
+        cache[key] = { ...normalizeChannel(obj), letter: ch };
+        emitFrame();
+      }
+    } else if (rel === "system/status") {
+      cache.system = { ...cache.system, ...normalizeSystem(obj) };
+      emitFrame();
+    } else if (rel === "system/voice/event") {
+      cache.voice = obj;
+      emitFrame();
+    } else if (rel === "aggregate") {
+      cache.aggregate = obj;
     }
   }
 
   function connect() {
-    if (!brokerUrl || !deviceId) {
-      statusChange("error", "Broker 地址或设备 ID 未配置");
-      return Promise.reject(new Error("Broker 地址或设备 ID 未配置"));
+    if (!deviceId) return;
+
+    const brokerUrl  = localStorage.getItem("mqtt_broker")  || "wss://w0378faf.ala.cn-shenzhen.emqxsl.cn:8084/mqtt";
+    const username   = localStorage.getItem("mqtt_username") || "rk3506";
+    const password   = localStorage.getItem("mqtt_password") || "";
+
+    if (!password) { reportStatus("disconnected", "请先在设置中填写 MQTT 密码"); return; }
+
+    reportStatus("connecting");
+
+    const base = t(prefix, deviceId);
+    topics = [
+      `${base}/mppt/telemetry`,
+      `${base}/channel/a/telemetry`,
+      `${base}/channel/b/telemetry`,
+      `${base}/channel/c/telemetry`,
+      `${base}/system/status`,
+      `${base}/system/voice/event`,
+      `${base}/aggregate`,
+    ];
+
+    try {
+      client = mqtt.connect(brokerUrl, {
+        protocolVersion: 5,
+        clientId: `web_${deviceId}_${Date.now()}`,
+        username, password,
+        clean: true, keepalive: 30,
+        connectTimeout: 10000,
+        reconnectPeriod: 0,
+      });
+    } catch (e) {
+      reportStatus("error", `mqtt.connect 失败: ${e.message}`);
+      return;
     }
 
-    return new Promise((resolve, reject) => {
-      // Clean up existing client
-      if (client) {
-        try { client.end(true); } catch (_) { /* ignore */ }
-        client = null;
-      }
+    client.on("connect", () => {
+      reportStatus("connected");
+      reconnectAttempt = 0;
+      topics.forEach((tp) => client.subscribe(tp, { qos: 1 }, (err) => {
+        if (err) console.warn("[mqtt] sub fail:", tp, err.message);
+      }));
+    });
 
-      statusChange("connecting");
+    client.on("message", (tp, payload) => dispatch(tp, payload.toString()));
 
-      const connectOpts = {
-        clean: true,
-        connectTimeout: 10_000,
-        reconnectPeriod: 0, // We handle reconnection ourselves
-      };
-      if (username) connectOpts.username = username;
-      if (password) connectOpts.password = password;
+    client.on("error", (err) => {
+      console.error("[mqtt] error:", err.message);
+      reportStatus("error", err.message);
+    });
 
-      try {
-        client = window.mqtt.connect(brokerUrl, connectOpts);
-      } catch (err) {
-        statusChange("error", err.message);
-        return reject(err);
-      }
-
-      const timeoutId = setTimeout(() => {
-        if (client && !client.connected) {
-          client.end(true);
-          client = null;
-          statusChange("error", "连接超时");
-          reject(new Error("MQTT 连接超时"));
-        }
-      }, 12_000);
-
-      client.on("connect", () => {
-        clearTimeout(timeoutId);
-        reconnectAttempts = 0;
-        log("info", `已连接 → ${brokerUrl}`);
-
-        // Subscribe to telemetry topic
-        client.subscribe(TELEMETRY_TOPIC, { qos: 1 }, (err) => {
-          if (err) {
-            log("warn", `订阅遥测失败: ${err.message}`);
-            statusChange("error", `订阅失败: ${err.message}`);
-            return reject(err);
-          }
-          statusChange("connected");
-          log("info", `已订阅遥测 → ${TELEMETRY_TOPIC}`);
-          resolve();
-        });
-      });
-
-      client.on("message", (topic, payload) => {
-        try {
-          const str = payload.toString();
-          const data = JSON.parse(str);
-          if (topic === TELEMETRY_TOPIC && dataCallback) {
-            dataCallback(parseTelemetry(data));
-          }
-        } catch (err) {
-          // Ignore non-JSON payloads
-          log("warn", `无法解析消息: ${topic}`);
-        }
-      });
-
-      client.on("error", (err) => {
-        clearTimeout(timeoutId);
-        log("error", err.message);
-        statusChange("error", err.message);
-        if (!client || !client.connected) {
-          reject(err);
-        }
-      });
-
-      client.on("close", () => {
-        log("info", "连接已关闭");
-        statusChange("disconnected");
-        if (running) {
-          scheduleReconnect();
-        }
-      });
-
-      client.on("offline", () => {
-        statusChange("offline");
-      });
+    client.on("close", () => {
+      if (started) { reportStatus("disconnected", "连接已断开，自动重连中…"); scheduleReconnect(); }
+      else reportStatus("disconnected");
     });
   }
 
+  function disconnect() {
+    clearReconnect();
+    if (client) { client.end(true); client = null; }
+  }
+
   function scheduleReconnect() {
-    if (!running) return;
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-
-    const delay = Math.min(
-      30_000,
-      1000 * Math.pow(2, Math.min(reconnectAttempts, 5)),
-    );
-    reconnectAttempts++;
-    statusChange("reconnecting", `${Math.round(delay / 1000)}s 后重试 (第 ${reconnectAttempts} 次)`);
-    log("info", `${Math.round(delay / 1000)}s 后重连...`);
-
-    reconnectTimer = setTimeout(() => {
-      if (!running) return;
-      connect().catch(() => {
-        // scheduleReconnect will be called from 'close' handler
-      });
-    }, delay);
+    clearReconnect();
+    const delay = Math.min(1000 * Math.pow(2, reconnectAttempt), 30000);
+    reconnectAttempt += 1;
+    reconnectTimer = setTimeout(() => { if (started) connect(); }, delay);
   }
 
-  function parseTelemetry(raw) {
-    // Normalize incoming data to the shape the dashboard expects
-    return {
-      metrics: {
-        vin: Number(raw.vin ?? raw.Vin ?? raw.VIN ?? 0),
-        iin: Number(raw.iin ?? raw.Iin ?? raw.IIN ?? 0),
-        pin: Number(raw.pin ?? raw.Pin ?? raw.PIN ?? raw.vin * raw.iin ?? 0),
-        vout: Number(raw.vout ?? raw.Vout ?? raw.VOUT ?? 0),
-        iout: Number(raw.iout ?? raw.Iout ?? raw.IOUT ?? 0),
-        pout: Number(raw.pout ?? raw.Pout ?? raw.POUT ?? raw.vout * raw.iout ?? 0),
-        efficiency: Number(raw.efficiency ?? raw.eff ?? raw.Efficiency ?? 0),
-        temp: Number(raw.temp ?? raw.temperature ?? raw.Temp ?? 0),
-      },
-      pwm: {
-        pwmc: Math.round(Number(raw.pwmc ?? raw.PWMC ?? 0)),
-        pwm: Math.round(Number(raw.pwm ?? raw.PWM ?? 0)),
-        ppwm: Math.round(Number(raw.ppwm ?? raw.PPWM ?? 0)),
-      },
-      status: {
-        buckMode: String(raw.buck_mode ?? raw.buckMode ?? "BUCK"),
-        antiBackflow: raw.anti_backflow ?? raw.antiBackflow ?? true ? "正常" : "异常",
-        driverEnabled: Boolean(raw.driver_enabled ?? raw.driverEnabled ?? true),
-        errorCode: Number(raw.error_code ?? raw.errorCode ?? 0),
-      },
-      rawFields: [
-        Number(raw.vin ?? raw.Vin ?? raw.VIN ?? 0),
-        Number(raw.vout ?? raw.Vout ?? raw.VOUT ?? 0),
-        Number(raw.iin ?? raw.Iin ?? raw.IIN ?? 0),
-        Number(raw.iout ?? raw.Iout ?? raw.IOUT ?? 0),
-        Number(raw.pin ?? raw.Pin ?? raw.PIN ?? raw.vin * raw.iin ?? 0),
-        Number(raw.pout ?? raw.Pout ?? raw.POUT ?? raw.vout * raw.iout ?? 0),
-      ],
-    };
+  function clearReconnect() {
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   }
 
-  // ============================================================
-  //  Public API (同 simulation source 接口)
-  // ============================================================
+  function reportStatus(state, detail) {
+    if (onStatus) onStatus({ state, detail: detail || "", ts: Date.now() });
+  }
+
+  // ---- Public API ----------------------------------------------------------
 
   return {
-    /** 开始连接并订阅数据 */
-    start() {
-      running = true;
-      return connect();
+    start(id, pfx) {
+      deviceId = id || localStorage.getItem("mqtt_device_id") || "rk3506";
+      prefix   = pfx || "energy";
+      started  = true;
+      disconnect();
+      connect();
     },
 
-    /** 断开连接 */
-    stop() {
-      running = false;
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      if (client) {
-        try {
-          client.unsubscribe(TELEMETRY_TOPIC);
-          client.end(true);
-        } catch (_) { /* ignore */ }
-        client = null;
-      }
-      statusChange("disconnected");
-    },
+    stop() { started = false; disconnect(); },
 
-    /** 注册遥测数据回调 */
-    onData(cb) {
-      dataCallback = cb;
-    },
-
-    /** 注册状态变更回调（连接状态、日志） */
-    onStatus(cb) {
-      statusCallback = cb;
-    },
-
-    /** 下发命令到网关 */
-    sendCommand(cmd) {
+    /** 发送命令到指定节点: "mppt", "channel_a", "channel_b", "channel_c", "system" */
+    sendCommand(node, cmd) {
       if (!client || !client.connected) {
-        console.warn("[MQTT] 未连接，无法发送命令:", cmd);
+        console.warn("[mqtt] sendCommand ignored — not connected");
         return;
       }
-      const payload = JSON.stringify({
-        cmd: String(cmd),
-        ts: Date.now(),
-      });
-      client.publish(COMMAND_TOPIC, payload, { qos: 1 }, (err) => {
-        if (err) {
-          console.error("[MQTT] 命令发送失败:", err.message);
-        } else {
-          console.log("[MQTT] 命令已发送:", cmd);
-        }
-      });
+      const base = t(prefix, deviceId);
+      let cmdTopic;
+      if (node === "system") cmdTopic = `${base}/system/command`;
+      else if (node === "mppt") cmdTopic = `${base}/mppt/command`;
+      else if (node.startsWith("channel_")) cmdTopic = `${base}/${node.replace("_", "/")}/command`;
+      else cmdTopic = `${base}/${node}/command`;
+
+      client.publish(cmdTopic, JSON.stringify(cmd), { qos: 1 });
     },
 
-    /** 获取当前 topic 信息（调试用） */
-    getTopics() {
-      return {
-        telemetry: TELEMETRY_TOPIC,
-        command: COMMAND_TOPIC,
-      };
-    },
-
-    /** 是否已连接 */
-    get connected() {
-      return client ? client.connected : false;
-    },
+    onData(cb) { onData = cb; },
+    onStatus(cb) { onStatus = cb; },
+    getTopics() { return [...topics]; },
+    getCache() { return buildFrame(); },
   };
 }

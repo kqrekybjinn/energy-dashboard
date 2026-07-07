@@ -1,299 +1,290 @@
-# 能源管理终端 — 网关接口协议 v1
+# 能源管理终端 — 网关接口协议 v2
 
-本文档定义了 RK3506 网关端与 Web Dashboard 之间通过 MQTT Broker
-进行双向通信的 JSON 协议。网关端只需按此规范发布遥测数据、
-订阅命令 topic 即可。
-
----
-
-## 1. MQTT Topic 约定
-
-`{prefix}` 默认为 `energy`，可在 dashboard MQTT 配置中调整。
-
-| 方向 | Topic | QoS | 说明 |
-|------|-------|-----|------|
-| 网关 → Dashboard | `{prefix}/{device_id}/telemetry` | 1 | 遥测数据，周期性发布 |
-| Dashboard → 网关 | `{prefix}/{device_id}/command` | 1 | 控制指令，下行命令 |
-
-`{device_id}` 为网关唯一标识，例如 `rk3506-gateway-001`。
+RK3506 网关与 Web Dashboard 双向 MQTT 通信协议。
+Topic 按 `设备 → 节点 → 方向` 分层。
 
 ---
 
-## 2. 遥测载荷 `telemetry`
+## 1. 物理拓扑
 
-网关周期性（建议 1-10Hz）发布到遥测 topic。
+```
+                         RK3506 + EC20 4G
+                              │
+              ┌──────────┬────┴────┬──────────┐
+              │ I2C bus  │  GPIO   │  UART    │
+              ▼          ▼         ▼          ▼
+          ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐
+          │MPPT+ │  │通道 A │  │通道 B │  │通道 C │
+          │电池  │  │可调输出│  │可调输出│  │可调输出│
+          │INA226│  │INA226 │  │INA226 │  │INA226 │
+          └──────┘  └──────┘  └──────┘  └──────┘
+          节点 0     节点 1     节点 2     节点 3
+```
 
-### 完整字段
+---
+
+## 2. MQTT Topic 树
+
+`{prefix}` 默认 `energy`，`{id}` 为设备 ID（如 `rk3506`）。
+
+```
+{prefix}/{id}/
+├── mppt/
+│   ├── telemetry        ← RK3506 → Dashboard (1Hz)
+│   ├── command          ← Dashboard → RK3506
+│   └── config           ← 参数同步 (采样电阻、校准值)
+│
+├── channel/a/
+│   ├── telemetry        ← 通道 A 实时数据
+│   ├── command          ← 设电压、开关
+│   └── protocol         ← 通信协议参数
+│
+├── channel/b/
+│   ├── telemetry
+│   ├── command
+│   └── protocol
+│
+├── channel/c/
+│   ├── telemetry
+│   ├── command
+│   └── protocol
+│
+├── system/
+│   ├── status           ← 网关 CPU/内存/4G 信号
+│   ├── voice/event      ← 语音识别事件
+│   └── command          ← 重启/升级
+│
+└── aggregate            ← 全节点聚合摘要 (0.1Hz)
+```
+
+### 订阅表
+
+| 方向 | Topic 模式 | QoS |
+|------|-----------|-----|
+| Dashboard 订阅 | `energy/{id}/mppt/telemetry` | 1 |
+| | `energy/{id}/channel/+/telemetry` | 1 |
+| | `energy/{id}/system/status` | 1 |
+| | `energy/{id}/system/voice/event` | 1 |
+| | `energy/{id}/aggregate` | 1 |
+| Dashboard 发布 | `energy/{id}/mppt/command` | 1 |
+| | `energy/{id}/channel/+/command` | 1 |
+| | `energy/{id}/system/command` | 1 |
+
+---
+
+## 3. 遥测载荷
+
+### 3.1 MPPT + 电池 `energy/{id}/mppt/telemetry`
 
 ```json
 {
   "ts": 1751894400123,
-  "vin": 55.23,
-  "iin": 2.51,
-  "pin": 138.6,
-  "vout": 28.05,
-  "iout": 4.55,
-  "pout": 127.5,
-  "efficiency": 92.0,
-  "temp": 42.5,
-  "pwmc": 180,
-  "pwm": 220,
-  "ppwm": 105,
-  "buck_mode": "BUCK",
-  "anti_backflow": true,
-  "driver_enabled": true,
+  "solar_voltage": 55.2,
+  "solar_current": 2.51,
+  "solar_power": 138.6,
+  "battery_voltage": 24.3,
+  "battery_current": 5.1,
+  "battery_power": 123.9,
+  "battery_soc": 78.5,
+  "battery_temp": 32.1,
+  "charge_mode": "MPPT",
+  "pwm_duty": 220,
+  "efficiency": 93.2,
   "error_code": 0
 }
 ```
 
-### 字段说明
+| 字段 | 类型 | 单位 | 说明 |
+|------|------|------|------|
+| `solar_voltage` | number | V | 光伏输入电压 |
+| `solar_current` | number | A | 光伏输入电流 |
+| `solar_power` | number | W | 光伏输入功率 |
+| `battery_voltage` | number | V | 电池端电压 |
+| `battery_current` | number | A | 充电电流 (+) / 放电 (-) |
+| `battery_soc` | number | % | 电池荷电状态 0-100 |
+| `battery_temp` | number | °C | 电池温度 |
+| `charge_mode` | string | — | MPPT / FLOAT / OFF |
+| `pwm_duty` | number | 0-255 | PWM 占空比 |
+| `efficiency` | number | % | 转换效率 |
+| `error_code` | number | — | 0 正常 |
 
-| 字段 | 类型 | 单位 | 必填 | 说明 |
-|------|------|------|------|------|
-| `ts` | number | ms | 否 | Unix 毫秒时间戳 |
-| `vin` | number | V | 是 | 输入电压（光伏板端） |
-| `iin` | number | A | 是 | 输入电流 |
-| `pin` | number | W | 否 | 输入功率（留空自动计算 vin×iin） |
-| `vout` | number | V | 是 | 输出电压（负载端） |
-| `iout` | number | A | 是 | 输出电流 |
-| `pout` | number | W | 否 | 输出功率（留空自动计算 vout×iout） |
-| `efficiency` | number | % | 否 | 转换效率 |
-| `temp` | number | °C | 否 | 设备温度 |
-| `pwmc` | number | 0-255 | 否 | PWM 占空比 C 相 |
-| `pwm` | number | 0-255 | 否 | PWM 占空比主路 |
-| `ppwm` | number | 0-255 | 否 | PWM 占空比 P 相 |
-| `buck_mode` | string | — | 否 | "BUCK" 或 "BOOST" |
-| `anti_backflow` | bool | — | 否 | 防逆流状态 |
-| `driver_enabled` | bool | — | 否 | 驱动使能 |
-| `error_code` | number | — | 否 | 错误码（0=正常） |
-
-### 最小载荷
-
-只需发布核心字段即可，其余字段 dashboard 会自动填默认值：
+### 3.2 通道 `energy/{id}/channel/{a|b|c}/telemetry`
 
 ```json
 {
-  "vin": 55.2,
-  "vout": 28.0,
-  "iin": 2.5,
-  "iout": 4.5
+  "ts": 1751894400123,
+  "enabled": true,
+  "label": "12V 路由",
+  "set_voltage": 12.0,
+  "actual_voltage": 12.05,
+  "actual_current": 1.25,
+  "actual_power": 15.06,
+  "temperature": 38.5,
+  "error_code": 0
 }
 ```
 
-### 兼容性提示
+| 字段 | 类型 | 单位 | 说明 |
+|------|------|------|------|
+| `enabled` | bool | — | 输出开关 |
+| `label` | string | — | 用户自定义名（语音可设） |
+| `set_voltage` | number | V | 设定的目标电压 |
+| `actual_voltage` | number | V | 实际输出电压 |
+| `actual_current` | number | A | 实际输出电流 |
+| `actual_power` | number | W | 实际输出功率 |
+| `temperature` | number | °C | 节点温度 |
+| `error_code` | number | — | 0 正常 |
 
-- 字段名支持多版本输入：`vin` / `Vin` / `VIN` 均被识别
-- 未知字段直接忽略，不做报错
-
----
-
-## 3. 命令载荷 `command`
-
-Dashboard 下发指令时发布到命令 topic。
+### 3.3 系统状态 `energy/{id}/system/status`
 
 ```json
 {
-  "cmd": "RESTART",
-  "ts": 1751894400123
+  "ts": 1751894400123,
+  "cpu_pct": 23.5,
+  "mem_mb": 128,
+  "disk_mb": 512,
+  "signal_dbm": -75,
+  "network_type": "LTE",
+  "uptime_s": 36000
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `cmd` | string | 命令字符串 |
-| `ts` | number | 发送时间戳 (ms) |
+### 3.4 语音事件 `energy/{id}/system/voice/event`
 
-### 预定义命令
-
-| 命令 | 说明 |
-|------|------|
-| `RESTART` | 重启网关 |
-| `FWUPDATE` | 触发固件升级 |
-| `INVD50.0` | 校准输入电压 50.0V |
-| `OUTVD28.5` | 校准输出电压 28.5V |
-| `RNFA0.002` | 设置输入采样电阻 0.002Ω |
-| `RNFB0.002` | 设置输出采样电阻 0.002Ω |
-| `INCD10.0` | 设置 ADS712 电流校准 10.0 |
-
-### 自定义命令
-
-除预定义命令外，网关可自行扩展。Dashboard 的自定义命令输入框
-会原样透传到 `cmd` 字段。
-
----
-
-## 4. RK3506 网关端实现要点
-
-### 4.1 MQTT 客户端库
-
-Python 推荐 `paho-mqtt`：
-
-```bash
-pip3 install paho-mqtt
+```json
+{
+  "ts": 1751894400123,
+  "text": "打开通道一设为12伏",
+  "intent": "set_channel_voltage",
+  "params": { "channel": "a", "value": 12.0 },
+  "confidence": 0.95,
+  "executed": true
+}
 ```
 
-C/C++ 推荐 Eclipse Paho Embedded C，或 mosquitto client lib。
+### 3.5 聚合摘要 `energy/{id}/aggregate`
 
-### 4.2 连接示例 (Python)
+低频 (0.1Hz) 发布的全局快照，所有节点关键值在一包里，适合数据页存档。
 
-```python
-import paho.mqtt.client as mqtt
-import json, time, ssl
-from your_sensor_driver import read_power_data
-
-BROKER = "broker.emqx.io"
-PORT = 8883  # TLS
-DEVICE_ID = "rk3506-gateway-001"
-TELEMETRY_TOPIC = f"energy/{DEVICE_ID}/telemetry"
-COMMAND_TOPIC = f"energy/{DEVICE_ID}/command"
-
-def on_connect(client, userdata, flags, rc):
-    print(f"Connected: {rc}")
-    client.subscribe(COMMAND_TOPIC, qos=1)
-
-def on_command(client, userdata, msg):
-    payload = json.loads(msg.payload)
-    cmd = payload.get("cmd", "")
-    print(f"Received command: {cmd}")
-    # 处理命令：判断是否 RESTART / FWUPDATE / CAL:* 等
-
-client = mqtt.Client(client_id=DEVICE_ID)
-client.tls_set(cert_reqs=ssl.CERT_REQUIRED)  # TLS 加密
-client.on_connect = on_connect
-client.on_message = on_command
-
-client.connect(BROKER, PORT, keepalive=60)
-client.loop_start()
-
-# 主循环：周期性发布遥测
-while True:
-    data = read_power_data()  # 从 INA226 / ADC 读取
-    client.publish(TELEMETRY_TOPIC, json.dumps(data), qos=1)
-    time.sleep(0.2)  # 5Hz
+```json
+{
+  "ts": 1751894400123,
+  "mppt": { "solar_power": 138.6, "battery_soc": 78.5, "battery_voltage": 24.3 },
+  "channel_a": { "enabled": true, "actual_voltage": 12.05, "actual_power": 15.06 },
+  "channel_b": { "enabled": false, "actual_voltage": 0, "actual_power": 0 },
+  "channel_c": { "enabled": true, "actual_voltage": 24.1, "actual_power": 12.53 },
+  "total_output_power": 27.59,
+  "system": { "signal_dbm": -75, "uptime_s": 36000 }
+}
 ```
 
-### 4.3 4G 联网注意事项
+---
 
-- EC20 模组先拨号获取 IP：`AT+QNETDEVCTL=1,1,1` 或 PPP 拨号
-- MQTT 走 TLS 8883 端口，运营商通常不会拦截
-- 建议设 keepalive ≤ 60s，避免 NAT 会话超时
-- `client_id` 使用设备唯一序列号（如 `/etc/machine-id` 或 IMEI）
+## 4. 命令载荷
+
+### 4.1 通道控制 `energy/{id}/channel/{a|b|c}/command`
+
+```json
+// 设置目标电压
+{ "cmd": "set_voltage", "value": 12.0 }
+
+// 开关通道
+{ "cmd": "set_enabled", "value": true }
+
+// 设置显示标签（语音友好）
+{ "cmd": "set_label", "value": "12V 路由器" }
+
+// 配置通信协议参数
+{ "cmd": "set_protocol", "value": { "type": "uart", "baud": 115200, "data_bits": 8, "parity": "none" } }
+```
+
+### 4.2 MPPT 控制 `energy/{id}/mppt/command`
+
+```json
+{ "cmd": "set_charge_mode", "value": "MPPT" }
+{ "cmd": "set_charge_mode", "value": "FLOAT" }
+{ "cmd": "set_charge_mode", "value": "OFF" }
+{ "cmd": "set_sample_resistor_input", "value": 0.002 }
+{ "cmd": "set_sample_resistor_output", "value": 0.002 }
+{ "cmd": "calibrate_voltage_in", "value": 55.0 }
+{ "cmd": "calibrate_voltage_out", "value": 28.0 }
+```
+
+### 4.3 系统命令 `energy/{id}/system/command`
+
+```json
+{ "cmd": "restart" }
+{ "cmd": "restart_voice" }
+{ "cmd": "firmware_update" }
+{ "cmd": "get_config" }
+```
 
 ---
 
-## 5. Dashboard 对接步骤
+## 5. Dashboard 节点面板
 
-1. 打开 Dashboard → **仪表盘** → 设备连接
-2. 切换到 **MQTT 网关** 模式
-3. 填写：
-   - **Broker 地址**: `wss://broker.emqx.io:8084/mqtt`（示例，替换为实际 Broker）
-   - **设备 ID**: `rk3506-gateway-001`（与网关端一致）
-   - **用户名/密码**: 按 Broker 要求填写
-4. 点击 **保存配置** → **连接设备** → **开始采集**
-5. 收到遥测后，仪表盘自动更新指标卡和波形图
+```
+┌─────────────────────────────────────────────┐
+│  ● MQTT · rk3506                      [▶]  │
+├──────────────┬──────────────────────────────┤
+│ ☀ MPPT 电池   │  ════ 波形图 ════           │
+│ 光伏 55.2V   │                              │
+│ 电池 24.3V   │  点击节点卡片切换波形数据源    │
+│ SOC ████░78% │                              │
+│              │                              │
+│ A 通道 ○12V  │                              │
+│ 已开启 12.05V│                              │
+│ 1.25A 15.1W │                              │
+│ [关] [设值]  │                              │
+│              │                              │
+│ B 通道 ○5V   │                              │
+│ 已关闭       │                              │
+│ [开] [设值]  │                              │
+│              │                              │
+│ C 通道 ○24V  │                              │
+│ 已开启 24.1V │                              │
+│ 0.52A 12.5W │                              │
+│ [关] [设值]  │                              │
+└──────────────┴──────────────────────────────┘
+```
 
 ---
 
-## 6. Broker 部署
+## 6. 语音助手集成
 
-采用两阶段方案：先上云验证，后迁自建。
+```
+用户: "打开通道一，设为 12 伏"
+  │
+  ▼
+RK3506 本地唤醒 → ASR → NLU
+  │
+  intent: set_channel_voltage
+  channel: a, value: 12.0
+  │
+  ├── I2C/DAC → 设电压
+  ├── MQTT publish → energy/rk3506/channel/a/telemetry  (状态更新)
+  └── MQTT publish → energy/rk3506/system/voice/event    (事件日志)
+```
 
-### 阶段 A：EMQX Cloud Serverless（当前，零运维验证）
+Dashboard 实时收到更新，无需轮询。
 
-适用场景：开发调试、单设备验证、概念验证。免费额度 100 设备/月 1GB 流量。
+---
 
-#### 创建步骤
+## 7. Broker 部署
 
-当前使用 **EMQX Cloud 国内版（深圳）**：
+当前使用 **EMQX Cloud 国内版（深圳）**。
 
 | 项 | 值 |
 |----|-----|
-| API 地址 | `https://w0378faf.ala.cn-shenzhen.emqxsl.cn:8443/api/v5` |
 | WSS 地址 | `wss://w0378faf.ala.cn-shenzhen.emqxsl.cn:8084/mqtt` |
-| MQTT 用户 | `rk3506`（Dashboard 默认） |
+| MQTTS 地址 | `mqtts://w0378faf.ala.cn-shenzhen.emqxsl.cn:8883` |
+| API 地址 | `https://w0378faf.ala.cn-shenzhen.emqxsl.cn:8443/api/v5` |
+| 默认设备 | `rk3506` |
 
-1. 打开 https://cloud.emqx.com/ → 注册 → 创建 **Serverless** 部署
-2. 区域选 `ap-southeast-1`（与 Supabase 同区，延迟最低）
-3. 创建完成后，在 **Authentication** 中添加用户：
-   ```
-   用户名: rk3506-gateway-001
-   密码:   <你设的密码>
-   ```
-4. 在 **Authorization** 中添加 ACL（可选）：
-   ```
-   rk3506-gateway-001 → energy/rk3506-gateway-001/telemetry → Publish
-   rk3506-gateway-001 → energy/rk3506-gateway-001/command   → Subscribe
-   ```
-5. 从 **Overview** 复制 WSS 地址，填入 Dashboard：
-   ```
-   Broker:  wss://<你的实例>.ala.ap-southeast-1.emqxsl.com:8084/mqtt
-   设备 ID: rk3506-gateway-001
-   用户名:  rk3506-gateway-001
-   密码:    <你设的密码>
-   ```
+### 阶段 A：EMQX Cloud Serverless（当前）
 
-#### EMQX Cloud API 管理（curl CLI）
+免费额度 100 设备/月 1GB。Dashboard 填 WSS 地址即可。
 
-```bash
-# 查看客户端
-curl -s "https://<你的实例>.ala.ap-southeast-1.emqxsl.com/api/v5/clients" \
-  -u "<AppID>:<AppSecret>"
+### 阶段 B：自建 Docker（后续）
 
-# 查看订阅
-curl -s "https://<你的实例>.ala.ap-southeast-1.emqxsl.com/api/v5/subscriptions" \
-  -u "<AppID>:<AppSecret>"
-
-# 踢出客户端
-curl -s -X DELETE \
-  "https://<你的实例>.ala.ap-southeast-1.emqxsl.com/api/v5/clients/<clientid>" \
-  -u "<AppID>:<AppSecret>"
-```
-
-> AppID / AppSecret 在 EMQX Cloud Console → 部署 → API Access 中创建。
-
-### 阶段 B：自建 Docker（后续迁移，无限制）
-
-当免费额度不够或需要更低延迟时，迁移到自建 VPS。`broker/` 目录已准备好所有文件。
-
-#### 迁移步骤
-
-```bash
-# 1. 在 VPS 上一键启动
-cd broker/
-./broker-setup.sh up
-
-# 2. 创建相同的用户（或批量导入）
-./broker-setup.sh add-user rk3506-gateway-001 <密码>
-
-# 3. 授权
-./broker-setup.sh grant rk3506-gateway-001 energy/rk3506-gateway-001/telemetry pub
-./broker-setup.sh grant rk3506-gateway-001 energy/rk3506-gateway-001/command sub
-
-# 4. 确认运行
-./broker-setup.sh info
-```
-
-#### 迁移影响
-
-```
-阶段 A                           阶段 B
-EMQX Cloud Serverless    ──→    你的 VPS 上 Docker EMQX
-wss://xxx.ala...         ──→    wss://<你的IP>:8084/mqtt
-```
-
-**Dashboard 只需改一个字符串**——把 Broker 地址从 EMQX Cloud 换成你的 VPS IP。  
-
-**RK3506 网关端同理**——改 `BROKER` 变量即可。Topic 和用户完全不变。
-
-#### 自建优势
-
-| 维度 | EMQX Cloud Serverless | 自建 Docker |
-|------|----------------------|-------------|
-| 延迟（国内 4G） | ~100-200ms（新加坡） | ~30-50ms（国内机房） |
-| 流量 | 1GB/月免费 | 无限 |
-| 设备数 | 100 | 不限 |
-| 离线消息持久化 | ❌ Serverless 不支持 | ✅ 磁盘队列 |
-| 数据本地化 | 新加坡 | 你自己的 VPS |
-| 运维 | 零 | `docker compose pull && up -d` |
-
-> 建议：阶段 A 跑通整条链路后，立刻切到阶段 B。EMQX Cloud Serverless 的 1GB 流量对实时遥测（5Hz × 6 通道 JSON）大约能撑 3-5 天持续运行。
+`broker/` 目录已备好 `docker-compose.yml` 和 `broker-setup.sh`，一键迁移。

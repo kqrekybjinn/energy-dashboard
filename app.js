@@ -1,5 +1,5 @@
 import { cloud, CLOUD_API_VERSION } from "./cloud.js";
-import { createMqttSource } from "./mqtt-source.js";
+import { createMQTTSource } from "./mqtt-source.js";
 
 const DB_NAME = "energy-dashboard-db";
 const DB_VERSION = 1;
@@ -8,51 +8,54 @@ const SW_CACHE_PREFIX = "energy-dashboard-";
 const MQTT_CONFIG_KEY = "energy-dashboard-mqtt-config";
 
 function loadMqttConfig() {
-  try {
-    return JSON.parse(localStorage.getItem(MQTT_CONFIG_KEY) || "null") || {};
-  } catch {
-    return {};
-  }
+  try { return JSON.parse(localStorage.getItem(MQTT_CONFIG_KEY) || "null") || {}; }
+  catch { return {}; }
 }
+function saveMqttConfig(cfg) { localStorage.setItem(MQTT_CONFIG_KEY, JSON.stringify(cfg)); }
 
-function saveMqttConfig(cfg) {
-  localStorage.setItem(MQTT_CONFIG_KEY, JSON.stringify(cfg));
-}
+// ---- 默认空帧 ---------------------------------------------------------------
+
+function emptyMPPT() { return { solar_voltage:0, solar_current:0, solar_power:0, battery_voltage:0, battery_current:0, battery_power:0, battery_soc:0, battery_temp:0, charge_mode:"OFF", pwm_duty:0, efficiency:0, error_code:0 }; }
+function emptyChannel(letter) { return { letter, enabled:false, label:`通道 ${letter.toUpperCase()}`, set_voltage:0, actual_voltage:0, actual_current:0, actual_power:0, temperature:0, error_code:0 }; }
+
+// ---- 应用状态 ---------------------------------------------------------------
 
 const state = {
   view: "dashboard",
   cloudConfigured: cloud.configured,
-  cloudUser: null,
-  cloudProfile: null,
-  cloudReady: false,
-  appVersion: {
-    current: localStorage.getItem(APP_VERSION_KEY) || "",
-    latest: "",
-    checking: true,
-    updateAvailable: false,
-    error: "",
-  },
+  cloudUser: null, cloudProfile: null, cloudReady: false,
+  appVersion: { current: localStorage.getItem(APP_VERSION_KEY) || "", latest: "", checking: true, updateAvailable: false, error: "" },
+
   // Data source
-  sourceMode: "sim", // "sim" | "mqtt"
+  sourceMode: "sim",       // "sim" | "mqtt"
   deviceConnected: false,
   streaming: false,
   sampleCount: 300,
-  chartMode: "wave", // "wave" | "raw"
-  // MQTT config (persisted)
+  chartMode: "wave",       // "wave" | "raw"
+  selectedNode: "mppt",    // 波形图当前选中的节点
+
+  // Multi-channel live data
+  mppt: emptyMPPT(),
+  channel_a: emptyChannel("a"),
+  channel_b: emptyChannel("b"),
+  channel_c: emptyChannel("c"),
+  system: { cpu_pct:0, mem_mb:0, disk_mb:0, signal_dbm:0, network_type:"LTE", uptime_s:0 },
+  voice: null,
+
+  // Per-node time-series for waveform chart
+  nodeSeries: { mppt:[], channel_a:[], channel_b:[], channel_c:[] },
+
+  // MQTT config
   mqtt: {
     brokerUrl: loadMqttConfig().brokerUrl || "wss://w0378faf.ala.cn-shenzhen.emqxsl.cn:8084/mqtt",
     deviceId: loadMqttConfig().deviceId || "rk3506",
     username: loadMqttConfig().username || "rk3506",
     password: loadMqttConfig().password || "",
   },
-  // MQTT connection status
-  mqttStatus: { state: "idle", detail: "" },
+  mqttStatus: { state:"idle", detail:"" },
   mqttLogs: [],
-  // Live data
-  status: { buckMode: "BUCK", antiBackflow: "正常", driverEnabled: true, errorCode: 0 },
-  pwm: { pwmc: 0, pwm: 0, ppwm: 0 },
-  metrics: { vin: 0, iin: 0, pin: 0, vout: 0, iout: 0, pout: 0, efficiency: 0, temp: 0 },
-  calibration: { invd: 50.0, outvd: 50.0, rnfa: 0.002, rnfb: 0.002, incd: 10.0 },
+
+  // Chart channels (derived from selectedNode)
   channels: [],
   rawLines: [],
 };
@@ -90,11 +93,8 @@ async function initCloud() {
   } catch (error) {
     console.warn("云端会话失效", error);
     cloud.clearSession();
-    state.cloudUser = null;
-    state.cloudProfile = null;
-  } finally {
-    state.cloudReady = true;
-  }
+    state.cloudUser = null; state.cloudProfile = null;
+  } finally { state.cloudReady = true; }
 }
 
 // ============================================================
@@ -102,11 +102,8 @@ async function initCloud() {
 // ============================================================
 
 function bindGlobalEvents() {
-  document.querySelectorAll(".tab-button").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.view = button.dataset.view;
-      render();
-    });
+  document.querySelectorAll(".tab-button").forEach((btn) => {
+    btn.addEventListener("click", () => { state.view = btn.dataset.view; render(); });
   });
   view.addEventListener("click", handleViewClick);
   view.addEventListener("input", handleViewInput);
@@ -115,42 +112,48 @@ function bindGlobalEvents() {
 async function handleViewClick(event) {
   const target = event.target.closest("[data-action]");
   if (!target) return;
-  const action = target.dataset.action;
+  const a = target.dataset.action;
 
   // Auth
-  if (action === "sign-in-provider") await signInProvider(target.dataset.provider || "github");
-  if (action === "sign-out") await signOutCloud();
-  if (action === "save-profile") await saveProfile();
-  if (action === "refresh-app") await refreshAppAssets();
+  if (a === "sign-in-provider") await signInProvider(target.dataset.provider || "github");
+  if (a === "sign-out") await signOutCloud();
+  if (a === "save-profile") await saveProfile();
+  if (a === "refresh-app") await refreshAppAssets();
 
   // Device
-  if (action === "device-connect") await toggleDeviceConnection();
-  if (action === "stream-toggle") toggleStreaming();
-  if (action === "chart-wave") { state.chartMode = "wave"; render(); }
-  if (action === "chart-raw") { state.chartMode = "raw"; render(); }
-  if (action === "device-restart") { dataSource?.sendCommand("RESTART"); showToast("已发送重启指令"); }
-  if (action === "device-fwupdate") { dataSource?.sendCommand("FWUPDATE"); showToast("已发送固件升级指令"); }
-  if (action === "send-command") sendCustomCommand();
-  if (action === "send-calib") sendCalibration(target.dataset.calib);
+  if (a === "device-connect") await toggleDeviceConnection();
+  if (a === "stream-toggle") toggleStreaming();
+  if (a === "chart-wave") { state.chartMode = "wave"; render(); }
+  if (a === "chart-raw") { state.chartMode = "raw"; render(); }
+
+  // Node selection for chart
+  if (a === "select-node") {
+    state.selectedNode = target.dataset.node;
+    rebuildChannels();
+    render();
+  }
+
+  // Channel control
+  if (a === "ch-toggle") sendChannelToggle(target.dataset.channel);
+  if (a === "ch-set-voltage") sendChannelSetVoltage(target.dataset.channel);
+  if (a === "mppt-set-mode") sendMpptSetMode(target.dataset.mode);
+
+  // System
+  if (a === "system-restart") { dataSource?.sendCommand("system", { cmd:"restart" }); showToast("已发送重启指令"); }
+  if (a === "system-fwupdate") { dataSource?.sendCommand("system", { cmd:"firmware_update" }); showToast("已发送固件升级指令"); }
 
   // MQTT config
-  if (action === "mqtt-save") saveMqttConfigToState();
-  if (action === "source-mode") {
+  if (a === "mqtt-save") saveMqttConfigToState();
+  if (a === "source-mode") {
     state.sourceMode = target.dataset.mode;
-    if (state.deviceConnected) {
-      disconnectDevice();
-      showToast(`已切换到 ${state.sourceMode === "mqtt" ? "MQTT" : "模拟"} 模式，请重新连接`);
-    }
+    if (state.deviceConnected) { disconnectDevice(); showToast(`已切换到 ${state.sourceMode==="mqtt"?"MQTT":"模拟"} 模式，请重新连接`); }
     render();
   }
 }
 
 function handleViewInput(event) {
-  const target = event.target;
-  if (!target) return;
-  if (target.id === "sampleCount") {
-    state.sampleCount = Number(target.value) || 300;
-  }
+  const t = event.target;
+  if (t.id === "sampleCount") state.sampleCount = Number(t.value) || 300;
 }
 
 // ============================================================
@@ -158,16 +161,14 @@ function handleViewInput(event) {
 // ============================================================
 
 function render() {
-  document.querySelectorAll(".tab-button").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.view === state.view);
-  });
+  document.querySelectorAll(".tab-button").forEach((b) => b.classList.toggle("is-active", b.dataset.view === state.view));
   if (state.view === "dashboard") renderDashboard();
   if (state.view === "data") renderData();
   if (state.view === "settings") renderSettings();
 }
 
 // ============================================================
-//  DASHBOARD
+//  DASHBOARD — 多节点面板 + 波形图
 // ============================================================
 
 function renderDashboard() {
@@ -175,11 +176,11 @@ function renderDashboard() {
     <div class="dashboard-grid">
       <div class="dash-left">
         ${renderDeviceBar()}
-        ${renderStatusPanel()}
-        ${renderPwmPanel()}
-        ${renderMetricsPanel()}
-        ${renderCalibrationPanel()}
-        ${renderFunctionsPanel()}
+        ${renderNodeCardMPPT()}
+        ${renderNodeCardChannel("a")}
+        ${renderNodeCardChannel("b")}
+        ${renderNodeCardChannel("c")}
+        ${renderSystemBar()}
       </div>
       <div class="dash-right">
         ${renderChartPanel()}
@@ -189,22 +190,19 @@ function renderDashboard() {
   if (state.chartMode === "wave" && state.streaming) initChart();
 }
 
+// ---- 设备连接条 -------------------------------------------------------------
+
 function renderDeviceBar() {
-  const dot = state.deviceConnected
-    ? '<span class="conn-dot on"></span>'
-    : '<span class="conn-dot"></span>';
+  const dot = state.deviceConnected ? '<span class="conn-dot on"></span>' : '<span class="conn-dot"></span>';
   const label = state.deviceConnected
     ? (state.sourceMode === "mqtt" ? `MQTT · ${escapeHtml(state.mqtt.deviceId)}` : "模拟数据")
     : "未连接";
-  const btnLabel = state.streaming ? "⏹" : state.deviceConnected ? "▶" : "连接";
+  const btnLabel = state.streaming ? "⏹ 停止" : state.deviceConnected ? "▶ 开始" : "连接";
   const btnAction = state.streaming ? "stream-toggle" : state.deviceConnected ? "stream-toggle" : "device-connect";
 
   return `
     <section class="panel device-bar">
-      <div class="device-bar-left">
-        ${dot}
-        <span class="device-bar-label">${label}</span>
-      </div>
+      <div class="device-bar-left">${dot}<span class="device-bar-label">${label}</span></div>
       <div class="device-bar-right">
         ${state.deviceConnected ? `<span class="device-bar-samples">${state.sampleCount} 点</span>` : ""}
         <button class="button small-button" type="button" data-action="${btnAction}">${btnLabel}</button>
@@ -213,243 +211,205 @@ function renderDeviceBar() {
   `;
 }
 
-function renderStatusPanel() {
-  const s = state.status;
+// ---- MPPT 节点卡片 ---------------------------------------------------------
+
+function renderNodeCardMPPT() {
+  const m = state.mppt;
+  const selected = state.selectedNode === "mppt" ? " node-card--selected" : "";
+  const soc = m.battery_soc || 0;
+  const socColor = soc > 60 ? "var(--good)" : soc > 20 ? "#d97706" : "var(--danger)";
+
   return `
-    <section class="panel">
-      <h2>运行状态</h2>
-      <div class="status-grid">
-        <div class="status-item">
-          <span class="status-label">BUCK 模式</span>
-          <span class="status-value">${escapeHtml(s.buckMode)}</span>
+    <section class="panel node-card${selected}" data-action="select-node" data-node="mppt">
+      <div class="node-card-header">
+        <span class="node-icon">☀</span>
+        <span class="node-title">MPPT 太阳能</span>
+        <span class="node-mode ${m.charge_mode==='MPPT'?'good':''}">${escapeHtml(m.charge_mode)}</span>
+      </div>
+      <div class="node-metrics-row">
+        <div class="node-metric">
+          <span class="nm-label">光伏</span>
+          <span class="nm-value" id="live-mppt-sv">${m.solar_voltage.toFixed(1)}<small>V</small> ${m.solar_current.toFixed(2)}<small>A</small></span>
         </div>
-        <div class="status-item">
-          <span class="status-label">防逆流</span>
-          <span class="status-value ${s.antiBackflow === '正常' ? 'good' : 'danger'}">${escapeHtml(s.antiBackflow)}</span>
+        <div class="node-metric">
+          <span class="nm-label">功率</span>
+          <span class="nm-value" id="live-mppt-sp">${m.solar_power.toFixed(1)}<small>W</small></span>
         </div>
-        <div class="status-item">
-          <span class="status-label">驱动</span>
-          <span class="status-value ${s.driverEnabled ? 'good' : ''}">${s.driverEnabled ? 'EN' : 'DIS'}</span>
+      </div>
+      <div class="node-metrics-row">
+        <div class="node-metric">
+          <span class="nm-label">电池</span>
+          <span class="nm-value" id="live-mppt-bv">${m.battery_voltage.toFixed(1)}<small>V</small> ${m.battery_current.toFixed(2)}<small>A</small></span>
         </div>
-        <div class="status-item">
-          <span class="status-label">错误码</span>
-          <span class="status-value ${s.errorCode === 0 ? '' : 'danger'}">${s.errorCode}</span>
+        <div class="node-metric">
+          <span class="nm-label">功率</span>
+          <span class="nm-value" id="live-mppt-bp">${m.battery_power.toFixed(1)}<small>W</small></span>
         </div>
+      </div>
+      <div class="soc-bar">
+        <div class="soc-fill" id="live-mppt-soc-fill" style="width:${Math.min(100,soc)}%;background:${socColor}"></div>
+        <span class="soc-text" id="live-mppt-soc">SOC ${soc.toFixed(0)}%</span>
+      </div>
+      <div class="node-extra">
+        <span>温度 <span id="live-mppt-temp">${m.battery_temp.toFixed(1)}</span>°C</span>
+        <span>效率 <span id="live-mppt-eff">${m.efficiency.toFixed(1)}</span>%</span>
+        <span>PWM ${m.pwm_duty}</span>
+        ${m.error_code !== 0 ? `<span class="danger">错误 ${m.error_code}</span>` : ""}
+      </div>
+      <div class="node-actions">
+        <button class="button small-button" type="button" data-action="mppt-set-mode" data-mode="MPPT">MPPT</button>
+        <button class="button small-button" type="button" data-action="mppt-set-mode" data-mode="FLOAT">浮充</button>
+        <button class="danger-button" type="button" data-action="mppt-set-mode" data-mode="OFF">关闭</button>
       </div>
     </section>
   `;
 }
 
-function renderPwmPanel() {
-  const p = state.pwm;
+// ---- 通道节点卡片 -----------------------------------------------------------
+
+function renderNodeCardChannel(letter) {
+  const ch = state[`channel_${letter}`];
+  const selected = state.selectedNode === `channel_${letter}` ? " node-card--selected" : "";
+  const statusBadge = ch.enabled
+    ? '<span class="node-mode good">已开启</span>'
+    : '<span class="node-mode">已关闭</span>';
+
   return `
-    <section class="panel">
-      <h2>PWM 值</h2>
-      <div class="pwm-list">
-        ${bar("PWMC", p.pwmc)}${bar("PWM", p.pwm)}${bar("PPWM", p.ppwm)}
+    <section class="panel node-card${selected}" data-action="select-node" data-node="channel_${letter}">
+      <div class="node-card-header">
+        <span class="node-icon ch-icon-${letter}">⚡</span>
+        <span class="node-title">${escapeHtml(ch.label || `通道 ${letter.toUpperCase()}`)}</span>
+        ${statusBadge}
+      </div>
+      ${ch.enabled ? `
+      <div class="node-metrics-row">
+        <div class="node-metric">
+          <span class="nm-label">实际电压</span>
+          <span class="nm-value" id="live-ch${letter}-v">${ch.actual_voltage.toFixed(2)}<small>V</small></span>
+        </div>
+        <div class="node-metric">
+          <span class="nm-label">设定电压</span>
+          <span class="nm-value">${ch.set_voltage.toFixed(2)}<small>V</small></span>
+        </div>
+      </div>
+      <div class="node-metrics-row">
+        <div class="node-metric">
+          <span class="nm-label">电流</span>
+          <span class="nm-value" id="live-ch${letter}-c">${ch.actual_current.toFixed(3)}<small>A</small></span>
+        </div>
+        <div class="node-metric">
+          <span class="nm-label">功率</span>
+          <span class="nm-value" id="live-ch${letter}-p">${ch.actual_power.toFixed(2)}<small>W</small></span>
+        </div>
+      </div>
+      <div class="node-extra">
+        <span>温度 <span id="live-ch${letter}-temp">${ch.temperature.toFixed(1)}</span>°C</span>
+        ${ch.error_code !== 0 ? `<span class="danger">错误 ${ch.error_code}</span>` : ""}
+      </div>
+      ` : `<div class="node-metric"><span class="nm-value subtle">通道未开启</span></div>`}
+      <div class="node-actions">
+        <div class="voltage-setter">
+          <input class="voltage-input" id="voltage_${letter}" type="number" value="${ch.set_voltage || 5.0}" step="0.1" min="0" max="48" />
+          <span class="voltage-unit">V</span>
+          <button class="button small-button" type="button" data-action="ch-set-voltage" data-channel="${letter}">设定</button>
+        </div>
+        <button class="${ch.enabled ? 'danger-button' : 'button'} small-button" type="button" data-action="ch-toggle" data-channel="${letter}">
+          ${ch.enabled ? '关闭' : '开启'}
+        </button>
       </div>
     </section>
   `;
 }
 
-function bar(label, value) {
-  const pct = Math.min(100, Math.max(0, (value / 255) * 100));
-  return `
-    <div class="pwm-row" data-label="${label}">
-      <span class="pwm-label">${label}</span>
-      <div class="pwm-track"><div class="pwm-fill" style="width:${pct.toFixed(0)}%"></div></div>
-      <span class="pwm-value">${value}</span>
-    </div>
-  `;
-}
+// ---- 系统状态条 -------------------------------------------------------------
 
-function renderMetricsPanel() {
-  const m = state.metrics;
+function renderSystemBar() {
+  const s = state.system;
+  const sigBars = s.signal_dbm >= -70 ? "▂▄▆█" : s.signal_dbm >= -85 ? "▂▄▆_" : s.signal_dbm >= -100 ? "▂▄__" : "▂___";
+  const uptime = fmtUptime(s.uptime_s);
+
   return `
-    <section class="panel">
-      <h2>实时数据</h2>
-      <div class="metrics-grid">
-        <div class="metric-card">
-          <span class="metric-label">输入电压</span>
-          <span class="metric-value" id="metric-vin">${m.vin.toFixed(2)} <small>V</small></span>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">输入电流</span>
-          <span class="metric-value" id="metric-iin">${m.iin.toFixed(3)} <small>A</small></span>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">输入功率</span>
-          <span class="metric-value" id="metric-pin">${m.pin.toFixed(2)} <small>W</small></span>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">输出电压</span>
-          <span class="metric-value" id="metric-vout">${m.vout.toFixed(2)} <small>V</small></span>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">输出电流</span>
-          <span class="metric-value" id="metric-iout">${m.iout.toFixed(3)} <small>A</small></span>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">输出功率</span>
-          <span class="metric-value" id="metric-pout">${m.pout.toFixed(2)} <small>W</small></span>
-        </div>
-        <div class="metric-card wide">
-          <span class="metric-label">效率</span>
-          <span class="metric-value" id="metric-eff">${m.efficiency.toFixed(1)} <small>%</small></span>
-        </div>
-        ${m.temp > 0 ? `
-        <div class="metric-card wide">
-          <span class="metric-label">温度</span>
-          <span class="metric-value" id="metric-temp">${m.temp.toFixed(1)} <small>°C</small></span>
-        </div>` : ""}
+    <section class="panel sys-bar">
+      <div class="sys-bar-row">
+        <span class="sys-item">📶 ${sigBars} ${s.signal_dbm} dBm</span>
+        <span class="sys-item">📡 ${escapeHtml(s.network_type)}</span>
+        <span class="sys-item">⏱ ${uptime}</span>
+        <span class="sys-item">🖥 CPU ${s.cpu_pct.toFixed(0)}%</span>
+        <span class="sys-item">💾 ${s.mem_mb}MB</span>
+      </div>
+      <div class="sys-actions">
+        <button class="button small-button" type="button" data-action="system-restart">重启网关</button>
+        <button class="button small-button" type="button" data-action="system-fwupdate">升级固件</button>
       </div>
     </section>
   `;
 }
 
-// ============================================================
-//  Connection panel — 双模式：模拟 / MQTT
-// ============================================================
-
-function renderDeviceConfigPanel() {
-  const btnLabel = state.deviceConnected ? "断开连接" : "连接设备";
-  const btnClass = state.deviceConnected ? "danger-button" : "button";
-
-  return `
-    <section class="panel">
-      <h2>设备连接</h2>
-
-      <div class="source-tabs">
-        <button class="tab-pill ${state.sourceMode === 'sim' ? 'active' : ''}" type="button" data-action="source-mode" data-mode="sim">模拟数据</button>
-        <button class="tab-pill ${state.sourceMode === 'mqtt' ? 'active' : ''}" type="button" data-action="source-mode" data-mode="mqtt">MQTT 网关</button>
-      </div>
-
-      ${state.sourceMode === "mqtt" ? renderMqttConfig() : renderSimInfo()}
-
-      <div class="field" style="margin-top:8px;">
-        <label for="sampleCount">图表采样数 (300–10000)</label>
-        <input id="sampleCount" type="number" value="${state.sampleCount}" min="300" max="10000" step="100" />
-      </div>
-
-      <div class="actions">
-        <button class="${btnClass}" type="button" data-action="device-connect">${btnLabel}</button>
-        ${state.streaming ? `<button class="button" type="button" data-action="stream-toggle">⏹ 停止采集</button>` : `<button class="button" type="button" data-action="stream-toggle" ${!state.deviceConnected ? "disabled" : ""}>▶ 开始采集</button>`}
-      </div>
-    </section>
-  `;
-}
-
-function renderSimInfo() {
-  return `
-    <div class="sim-notice">
-      <p class="subtle">使用本地模拟数据源。数据基于正弦波 + 噪声模拟太阳能板行为。</p>
-    </div>
-  `;
-}
-
-function renderMqttConfig() {
-  const m = state.mqtt;
-  const ms = state.mqttStatus;
-
-  let statusBadge = "";
-  if (ms.state === "connected") statusBadge = '<span class="mqtt-badge good">● 已连接</span>';
-  else if (ms.state === "connecting" || ms.state === "reconnecting") statusBadge = '<span class="mqtt-badge warn">◉ ' + escapeHtml(ms.detail || "连接中") + '</span>';
-  else if (ms.state === "error") statusBadge = '<span class="mqtt-badge danger">✕ ' + escapeHtml(ms.detail || "错误") + '</span>';
-  else if (ms.state === "offline") statusBadge = '<span class="mqtt-badge warn">○ 离线</span>';
-
-  return `
-    <div class="form-grid mqtt-config">
-      <div class="field">
-        <label for="mqttBroker">Broker 地址 (WSS)</label>
-        <input id="mqttBroker" type="text" value="${escapeHtml(m.brokerUrl)}" placeholder="wss://broker.emqx.io:8084/mqtt" ${state.deviceConnected ? "disabled" : ""} />
-      </div>
-      <div class="field">
-        <label for="mqttDeviceId">设备 ID</label>
-        <input id="mqttDeviceId" type="text" value="${escapeHtml(m.deviceId)}" placeholder="rk3506-gateway-001" ${state.deviceConnected ? "disabled" : ""} />
-      </div>
-      <div class="field-row">
-        <div class="field">
-          <label for="mqttUsername">用户名 (可选)</label>
-          <input id="mqttUsername" type="text" value="${escapeHtml(m.username)}" ${state.deviceConnected ? "disabled" : ""} />
-        </div>
-        <div class="field">
-          <label for="mqttPassword">密码 (可选)</label>
-          <input id="mqttPassword" type="password" value="${escapeHtml(m.password)}" ${state.deviceConnected ? "disabled" : ""} />
-        </div>
-      </div>
-
-      <div class="mqtt-topics">
-        <div><strong>遥测 Topic</strong> <code>energy/${escapeHtml(m.deviceId || "{id}")}/telemetry</code></div>
-        <div><strong>命令 Topic</strong> <code>energy/${escapeHtml(m.deviceId || "{id}")}/command</code></div>
-        ${statusBadge ? `<div class="mqtt-status-row">${statusBadge}</div>` : ""}
-      </div>
-
-      <div class="actions">
-        <button class="button small-button" type="button" data-action="mqtt-save" ${state.deviceConnected ? "disabled" : ""}>保存配置</button>
-      </div>
-    </div>
-  `;
+function fmtUptime(s) {
+  if (!s || s <= 0) return "—";
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 }
 
 // ============================================================
-//  Calibration / Functions
+//  Chart — 动态切换节点数据源
 // ============================================================
 
-function renderCalibrationPanel() {
-  const c = state.calibration;
-  return `
-    <section class="panel">
-      <h2>参数校准</h2>
-      <div class="form-grid">
-        ${calib("invd", "校准输入电压 (V)", c.invd, 120, 0.5, 3)}
-        ${calib("outvd", "校准输出电压 (V)", c.outvd, 120, 0.1, 3)}
-        ${calib("rnfa", "输入采样电阻 (Ω)", c.rnfa, 1, 0.001, 4)}
-        ${calib("rnfb", "输出采样电阻 (Ω)", c.rnfb, 1, 0.001, 4)}
-        ${calib("incd", "ADS712 电流校准", c.incd, 100, 0.5, 1)}
-      </div>
-    </section>
-  `;
+function nodeSeriesConfig(node) {
+  if (node === "mppt") return [
+    { key:"solar_voltage",  name:"光伏电压", color:"#FD42AC", unit:"V" },
+    { key:"solar_current",  name:"光伏电流", color:"#FF33FF", unit:"A" },
+    { key:"solar_power",    name:"光伏功率", color:"#FF5C5C", unit:"W" },
+    { key:"battery_voltage",name:"电池电压", color:"#398AD9", unit:"V" },
+    { key:"battery_current",name:"电池电流", color:"#5BEC8D", unit:"A" },
+    { key:"battery_power",  name:"电池功率", color:"#FFFF00", unit:"W" },
+  ];
+  // Channel nodes
+  return [
+    { key:"actual_voltage", name:"实际电压", color:"#398AD9", unit:"V" },
+    { key:"set_voltage",    name:"设定电压", color:"#FD42AC", unit:"V", dash:[6,3] },
+    { key:"actual_current", name:"实际电流", color:"#5BEC8D", unit:"A" },
+    { key:"actual_power",   name:"实际功率", color:"#FF5C5C", unit:"W" },
+  ];
 }
 
-function calib(key, label, value, max, step, decimals) {
-  return `
-    <div class="calib-row">
-      <label class="calib-label">${label}</label>
-      <input class="calib-input" id="calib_${key}" type="number" value="${value}" step="${step}" max="${max}" />
-      <button class="button small-button" type="button" data-action="send-calib" data-calib="${key}">发送</button>
-    </div>
-  `;
+function rebuildChannels() {
+  const cfg = nodeSeriesConfig(state.selectedNode);
+  const series = state.nodeSeries[state.selectedNode] || [];
+  state.channels = cfg.map((c) => ({
+    ...c,
+    data: series.map((f) => f[c.key] ?? null),
+  }));
 }
 
-function renderFunctionsPanel() {
-  return `
-    <section class="panel">
-      <h2>功能</h2>
-      <div class="func-grid">
-        <button class="button" type="button" data-action="device-restart">重启网关</button>
-        <button class="button" type="button" data-action="device-fwupdate">升级固件</button>
-      </div>
-      <div class="command-row">
-        <input id="cmdInput" type="text" placeholder="自定义命令..." />
-        <button class="button small-button" type="button" data-action="send-command">发送</button>
-      </div>
-    </section>
-  `;
+function defaultChannels() {
+  const cfg = nodeSeriesConfig(state.selectedNode);
+  return cfg.map((c) => ({ ...c, data: [] }));
 }
-
-// ============================================================
-//  Chart
-// ============================================================
 
 function renderChartPanel() {
+  const nodeNames = {
+    mppt: "☀ MPPT",
+    channel_a: "⚡ 通道 A", channel_b: "⚡ 通道 B", channel_c: "⚡ 通道 C",
+  };
+
   return `
     <section class="panel chart-panel">
       <div class="chart-toolbar">
         <h2>可视化图表</h2>
         <div class="chart-tabs">
-          <button class="tab-pill ${state.chartMode === 'wave' ? 'active' : ''}" type="button" data-action="chart-wave">波形图</button>
-          <button class="tab-pill ${state.chartMode === 'raw' ? 'active' : ''}" type="button" data-action="chart-raw">原始数据</button>
+          <button class="tab-pill ${state.chartMode==='wave'?'active':''}" type="button" data-action="chart-wave">波形图</button>
+          <button class="tab-pill ${state.chartMode==='raw'?'active':''}" type="button" data-action="chart-raw">原始数据</button>
         </div>
+      </div>
+      <div class="node-selector">
+        ${Object.entries(nodeNames).map(([k,v]) =>
+          `<button class="tab-pill node-pill ${state.selectedNode===k?'active':''}" type="button" data-action="select-node" data-node="${k}">${v}</button>`
+        ).join("")}
       </div>
       ${state.chartMode === 'wave' ? renderWaveView() : renderRawView()}
     </section>
@@ -473,20 +433,7 @@ function renderWaveView() {
 
 function renderRawView() {
   const lines = state.rawLines.slice(-50);
-  return `
-    <div class="raw-console">${lines.map((l) => `<div class="raw-line">${l}</div>`).join("") || '<div class="raw-line subtle">等待数据...</div>'}</div>
-  `;
-}
-
-function defaultChannels() {
-  return [
-    { name: "Vin", color: "#FD42AC", data: [] },
-    { name: "Vout", color: "#398AD9", data: [] },
-    { name: "Iin", color: "#FF33FF", data: [] },
-    { name: "Iout", color: "#5BEC8D", data: [] },
-    { name: "Pin", color: "#FF5C5C", data: [] },
-    { name: "Pout", color: "#FFFF00", data: [] },
-  ];
+  return `<div class="raw-console">${lines.map((l) => `<div class="raw-line">${l}</div>`).join("") || '<div class="raw-line subtle">等待数据...</div>'}</div>`;
 }
 
 function initChart() {
@@ -499,19 +446,18 @@ function initChart() {
   const labels = []; for (let i = -n; i < 0; i++) labels.push(i);
 
   const datasets = chs.map((ch) => ({
-    label: ch.name, data: ch.data.length ? ch.data.slice(-n) : new Array(n).fill(null),
+    label: ch.name,
+    data: ch.data.length ? ch.data.slice(-n) : new Array(n).fill(null),
     borderColor: ch.color, backgroundColor: ch.color + "22",
-    borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.1,
+    borderWidth: 1.5, borderDash: ch.dash || [],
+    pointRadius: 0, fill: false, tension: 0.1,
   }));
 
   chart = new Chart(ctx, {
     type: "line", data: { labels, datasets },
     options: {
       responsive: true, maintainAspectRatio: false, animation: false,
-      scales: {
-        x: { display: true },
-        y: { display: true, beginAtZero: false },
-      },
+      scales: { x: { display: true }, y: { display: true, beginAtZero: false } },
       plugins: { legend: { display: false } },
     },
   });
@@ -519,10 +465,7 @@ function initChart() {
   document.querySelectorAll(".channel-toggle").forEach((cb) => {
     cb.addEventListener("change", () => {
       const i = Number(cb.dataset.index);
-      if (chart?.data.datasets[i]) {
-        chart.data.datasets[i].hidden = !cb.checked;
-        chart.update();
-      }
+      if (chart?.data.datasets[i]) { chart.data.datasets[i].hidden = !cb.checked; chart.update(); }
     });
   });
 }
@@ -549,27 +492,62 @@ function updateChart() {
 
 function createSimulationSource() {
   let running = false, timer = null, cb = null, t = 0;
+
+  function tickMPPT() {
+    const sv = 55 + 10 * Math.sin(t * 0.01) + (Math.random() - 0.5) * 2;
+    const si = Math.max(0.1, 2.5 + 1.5 * Math.sin(t * 0.008) + (Math.random() - 0.5) * 0.3);
+    const sp = sv * si;
+    const bv = 24 + Math.sin(t * 0.003) * 1.5 + (Math.random() - 0.5) * 0.2;
+    const bi = 5 + Math.sin(t * 0.005) * 2 + (Math.random() - 0.5) * 0.5;
+    const bp = bv * bi;
+    const soc = Math.min(100, Math.max(0, 78 + 5 * Math.sin(t * 0.002)));
+    const eff = sp > 0 ? Math.min(98, (bp / sp) * 100) : 0;
+    return {
+      solar_voltage: sv, solar_current: si, solar_power: sp,
+      battery_voltage: bv, battery_current: bi, battery_power: bp,
+      battery_soc: soc, battery_temp: 32 + Math.sin(t * 0.002) * 3 + (Math.random() - 0.5) * 1,
+      charge_mode: t % 100 < 95 ? "MPPT" : "FLOAT",
+      pwm_duty: Math.min(255, Math.round(eff * 2.55)),
+      efficiency: eff, error_code: 0,
+    };
+  }
+
+  function tickChannel(enabled, baseV) {
+    if (!enabled) return { letter:"", enabled:false, label:"", set_voltage:baseV, actual_voltage:0, actual_current:0, actual_power:0, temperature:0, error_code:0 };
+    const av = baseV + (Math.random() - 0.5) * 0.2;
+    const ac = 0.5 + Math.random() * 2;
+    return {
+      letter:"", enabled:true, label:"", set_voltage: baseV,
+      actual_voltage: av, actual_current: ac, actual_power: av * ac,
+      temperature: 35 + (Math.random() - 0.5) * 10, error_code: 0,
+    };
+  }
+
   return {
     start() { running = true; t = 0; this._tick(); },
     stop() { running = false; if (timer) clearTimeout(timer); timer = null; },
     onData(fn) { cb = fn; },
-    sendCommand(cmd) { console.log("[SIM] CMD:", cmd); },
+    sendCommand(node, cmd) { console.log("[SIM] CMD →", node, cmd); },
     _tick() {
       if (!running) return;
       t++;
-      const vin = 55 + 10 * Math.sin(t * 0.01) + (Math.random() - 0.5) * 2;
-      const iin = Math.max(0.1, 2.5 + 1.5 * Math.sin(t * 0.008) + (Math.random() - 0.5) * 0.3);
-      const pin = vin * iin;
-      const vout = 28 + (Math.random() - 0.5) * 0.3;
-      const iout = Math.max(0, (pin * 0.92) / vout + (Math.random() - 0.5) * 0.5);
-      const pout = vout * iout;
-      const efficiency = pin > 0 ? (pout / pin) * 100 : 0;
-      if (cb) cb({
-        metrics: { vin, iin, pin, vout, iout, pout, efficiency, temp: 42 + (Math.random() - 0.5) * 5 },
-        pwm: { pwmc: Math.min(255, Math.round(efficiency * 2.55)), pwm: Math.min(255, Math.round((vin / 65) * 255)), ppwm: Math.min(255, Math.round((vout / 30) * 255)) },
-        status: { buckMode: vin > vout ? "BUCK" : "BOOST", antiBackflow: "正常", driverEnabled: true, errorCode: 0 },
-        rawFields: [vin, vout, iin, iout, pin, pout],
-      });
+      const frame = {
+        mppt: tickMPPT(),
+        channel_a: tickChannel(t % 30 > 15, 12),
+        channel_b: tickChannel(t % 50 > 30, 5),
+        channel_c: tickChannel(t % 40 > 10, 24),
+        system: {
+          cpu_pct: 20 + Math.random() * 15,
+          mem_mb: Math.round(80 + Math.random() * 30),
+          disk_mb: Math.round(400 + Math.random() * 50),
+          signal_dbm: Math.round(-70 + Math.random() * 15),
+          network_type: "LTE",
+          uptime_s: t * 10,
+        },
+        voice: null,
+        aggregate: null,
+      };
+      if (cb) cb(frame);
       timer = setTimeout(() => this._tick(), Math.max(50, 1000 / (state.sampleCount / 10)));
     },
   };
@@ -577,12 +555,7 @@ function createSimulationSource() {
 
 function createDataSource() {
   if (state.sourceMode === "mqtt") {
-    return createMqttSource({
-      brokerUrl: state.mqtt.brokerUrl,
-      deviceId: state.mqtt.deviceId,
-      username: state.mqtt.username,
-      password: state.mqtt.password,
-    });
+    return createMQTTSource();
   }
   return createSimulationSource();
 }
@@ -591,7 +564,7 @@ function disconnectDevice() {
   if (state.streaming) toggleStreamingSilent();
   if (dataSource) { dataSource.stop(); dataSource = null; }
   state.deviceConnected = false;
-  state.mqttStatus = { state: "idle", detail: "" };
+  state.mqttStatus = { state:"idle", detail:"" };
 }
 
 async function toggleDeviceConnection() {
@@ -599,27 +572,28 @@ async function toggleDeviceConnection() {
     disconnectDevice();
     render();
     showToast("已断开连接");
-  } else {
-    dataSource = createDataSource();
-    dataSource.onData(onDeviceData);
-    if (dataSource.onStatus) dataSource.onStatus(onMqttStatus);
-
-    if (state.sourceMode === "mqtt") {
-      try {
-        await dataSource.start();
-        state.deviceConnected = true;
-        showToast("MQTT 已连接");
-      } catch (err) {
-        showToast(`连接失败: ${err.message}`);
-        dataSource.stop();
-        dataSource = null;
-      }
-    } else {
-      state.deviceConnected = true;
-      showToast("已连接（模拟模式）");
-    }
-    render();
+    return;
   }
+
+  dataSource = createDataSource();
+  dataSource.onData(onDeviceData);
+  if (dataSource.onStatus) dataSource.onStatus(onMqttStatus);
+
+  if (state.sourceMode === "mqtt") {
+    try {
+      dataSource.start(state.mqtt.deviceId);
+      state.deviceConnected = true;
+      showToast("MQTT 已连接");
+    } catch (err) {
+      showToast(`连接失败: ${err.message}`);
+      dataSource.stop();
+      dataSource = null;
+    }
+  } else {
+    state.deviceConnected = true;
+    showToast("已连接（模拟模式）");
+  }
+  render();
 }
 
 function toggleStreaming() {
@@ -629,27 +603,26 @@ function toggleStreaming() {
     destroyChart();
     render();
     showToast("已停止采集");
-  } else {
-    if (!state.deviceConnected) {
-      dataSource = createDataSource();
-      dataSource.onData(onDeviceData);
-      if (dataSource.onStatus) dataSource.onStatus(onMqttStatus);
-      if (state.sourceMode === "mqtt") {
-        dataSource.start().then(() => {
-          state.deviceConnected = true;
-        }).catch((err) => {
-          showToast(`连接失败: ${err.message}`);
-        });
-      }
-      state.deviceConnected = true;
-    }
-    state.streaming = true;
-    state.channels = defaultChannels();
-    state.rawLines = [];
-    dataSource.start();
-    render();
-    showToast("开始采集数据");
+    return;
   }
+
+  if (!state.deviceConnected) {
+    dataSource = createDataSource();
+    dataSource.onData(onDeviceData);
+    if (dataSource.onStatus) dataSource.onStatus(onMqttStatus);
+    if (state.sourceMode === "mqtt") {
+      dataSource.start(state.mqtt.deviceId);
+    }
+    state.deviceConnected = true;
+  }
+
+  state.streaming = true;
+  state.nodeSeries = { mppt:[], channel_a:[], channel_b:[], channel_c:[] };
+  state.channels = defaultChannels();
+  state.rawLines = [];
+  dataSource.start(state.mqtt.deviceId);
+  render();
+  showToast("开始采集数据");
 }
 
 function toggleStreamingSilent() {
@@ -659,99 +632,129 @@ function toggleStreamingSilent() {
 }
 
 function onMqttStatus(event) {
-  if (event.type === "status") {
-    state.mqttStatus = { state: event.state, detail: event.detail || "" };
-    if (event.state === "disconnected" && !state.deviceConnected) {
-      state.mqttStatus = { state: "idle", detail: "" };
-    }
-  }
-  if (event.type === "log") {
-    state.mqttLogs.push(`[${event.level}] ${event.message}`);
-    if (state.mqttLogs.length > 50) state.mqttLogs = state.mqttLogs.slice(-30);
+  state.mqttStatus = { state: event.state, detail: event.detail || "" };
+  if (event.state === "disconnected" && !state.deviceConnected) {
+    state.mqttStatus = { state:"idle", detail:"" };
   }
 }
 
-function onDeviceData(packet) {
-  state.metrics = packet.metrics;
-  state.pwm = packet.pwm;
-  state.status = packet.status;
+// ---- 统一数据回调 -----------------------------------------------------------
 
-  const fields = packet.rawFields;
-  for (let i = 0; i < Math.min(fields.length, state.channels.length); i++) {
-    state.channels[i].data.push(fields[i]);
-    if (state.channels[i].data.length > state.sampleCount * 2) {
-      state.channels[i].data = state.channels[i].data.slice(-state.sampleCount);
+function onDeviceData(frame) {
+  // Update multi-channel state
+  if (frame.mppt)      state.mppt      = { ...state.mppt, ...frame.mppt };
+  if (frame.channel_a) state.channel_a = { ...state.channel_a, ...frame.channel_a, letter:"a" };
+  if (frame.channel_b) state.channel_b = { ...state.channel_b, ...frame.channel_b, letter:"b" };
+  if (frame.channel_c) state.channel_c = { ...state.channel_c, ...frame.channel_c, letter:"c" };
+  if (frame.system)    state.system    = { ...state.system, ...frame.system };
+  if (frame.voice)     state.voice     = frame.voice;
+
+  // Push to per-node time series
+  for (const node of ["mppt","channel_a","channel_b","channel_c"]) {
+    const f = frame[node];
+    if (!f) continue;
+    state.nodeSeries[node].push({ ...f });
+    if (state.nodeSeries[node].length > state.sampleCount * 2) {
+      state.nodeSeries[node] = state.nodeSeries[node].slice(-state.sampleCount);
     }
   }
 
-  const colors = ["#FD42AC", "#398AD9", "#FF33FF", "#5BEC8D", "#FF5C5C", "#FFFF00"];
-  const labels = ["Vin", "Vout", "Iin", "Iout", "Pin", "Pout"];
-  const rawHtml = fields.map((v, i) => `<span style="color:${colors[i]}">${labels[i]}:${Number(v).toFixed(3)}</span>`).join(" ");
-  state.rawLines.push(rawHtml);
-  if (state.rawLines.length > 200) state.rawLines = state.rawLines.slice(-100);
+  // Rebuild chart channels from selected node's series
+  rebuildChannels();
 
-  if (!chartTimer && state.chartMode === "wave") {
-    chartTimer = requestAnimationFrame(() => { chartTimer = null; updateChart(); updateLiveDisplays(); });
+  // Raw log line
+  const series = state.nodeSeries[state.selectedNode];
+  if (series.length) {
+    const last = series[series.length - 1];
+    const cfg = nodeSeriesConfig(state.selectedNode);
+    const rawHtml = cfg.map((c, i) =>
+      `<span style="color:${c.color}">${c.name}:${Number(last[c.key]??0).toFixed(2)}${c.unit}</span>`
+    ).join(" ");
+    state.rawLines.push(rawHtml);
+    if (state.rawLines.length > 200) state.rawLines = state.rawLines.slice(-100);
   }
-  if (state.chartMode === "raw") updateRawConsole();
+
+  // Throttled chart + UI update
+  if (!chartTimer) {
+    chartTimer = requestAnimationFrame(() => {
+      chartTimer = null;
+      updateChart();
+      updateLiveDisplays();
+    });
+  }
 }
 
 function updateLiveDisplays() {
-  const m = state.metrics;
-  updateElText("#metric-vin", `${m.vin.toFixed(2)} V`);
-  updateElText("#metric-iin", `${m.iin.toFixed(3)} A`);
-  updateElText("#metric-pin", `${m.pin.toFixed(2)} W`);
-  updateElText("#metric-vout", `${m.vout.toFixed(2)} V`);
-  updateElText("#metric-iout", `${m.iout.toFixed(3)} A`);
-  updateElText("#metric-pout", `${m.pout.toFixed(2)} W`);
-  updateElText("#metric-eff", `${m.efficiency.toFixed(1)} %`);
-  updateElText("#metric-temp", `${m.temp.toFixed(1)} °C`);
-  const rows = document.querySelectorAll(".pwm-row");
-  rows.forEach((r) => {
-    const label = r.dataset.label;
-    const val = state.pwm[label.toLowerCase()] ?? 0;
-    const fill = r.querySelector(".pwm-fill");
-    const tv = r.querySelector(".pwm-value");
-    if (fill) fill.style.width = `${Math.min(100, (val / 255) * 100)}%`;
-    if (tv) tv.textContent = val;
-  });
+  const m = state.mppt;
+
+  // MPPT card — 用 innerHTML 写入带 <small> 的复合值
+  updateElHtml("#live-mppt-sv", `${m.solar_voltage.toFixed(1)}<small>V</small> ${m.solar_current.toFixed(2)}<small>A</small>`);
+  updateElHtml("#live-mppt-sp", `${m.solar_power.toFixed(1)}<small>W</small>`);
+  updateElHtml("#live-mppt-bv", `${m.battery_voltage.toFixed(1)}<small>V</small> ${m.battery_current.toFixed(2)}<small>A</small>`);
+  updateElHtml("#live-mppt-bp", `${m.battery_power.toFixed(1)}<small>W</small>`);
+  updateElText("#live-mppt-soc", `SOC ${m.battery_soc.toFixed(0)}%`);
+  updateElText("#live-mppt-eff", m.efficiency.toFixed(1));
+  updateElText("#live-mppt-temp", m.battery_temp.toFixed(1));
+
+  // SOC bar fill
+  const socFill = document.querySelector("#live-mppt-soc-fill");
+  if (socFill) {
+    const soc = Math.min(100, Math.max(0, m.battery_soc || 0));
+    socFill.style.width = soc + "%";
+    const socColor = soc > 60 ? "var(--good)" : soc > 20 ? "#d97706" : "var(--danger)";
+    socFill.style.background = socColor;
+  }
+
+  // Channel cards — only update if streaming (elements exist from render)
+  for (const l of ["a","b","c"]) {
+    const ch = state[`channel_${l}`];
+    if (!ch || !ch.enabled) continue;
+    updateElHtml(`#live-ch${l}-v`, `${ch.actual_voltage.toFixed(2)}<small>V</small>`);
+    updateElHtml(`#live-ch${l}-c`, `${ch.actual_current.toFixed(3)}<small>A</small>`);
+    updateElHtml(`#live-ch${l}-p`, `${ch.actual_power.toFixed(2)}<small>W</small>`);
+    updateElText(`#live-ch${l}-temp`, ch.temperature.toFixed(1));
+  }
 }
+
+function updateElHtml(sel, html) { const el = document.querySelector(sel); if (el) el.innerHTML = html; }
 
 function updateElText(sel, text) { const el = document.querySelector(sel); if (el) el.textContent = text; }
 
-function updateRawConsole() {
-  const container = document.querySelector(".raw-console");
-  if (!container) return;
-  const lines = state.rawLines.slice(-50);
-  container.innerHTML = lines.map((l) => `<div class="raw-line">${l}</div>`).join("") || '<div class="raw-line subtle">等待数据...</div>';
-  container.scrollTop = container.scrollHeight;
+// ---- 通道命令 ---------------------------------------------------------------
+
+function sendChannelToggle(letter) {
+  const ch = state[`channel_${letter}`];
+  if (!ch) return;
+  const node = `channel_${letter}`;
+  const cmd = { cmd: "set_enabled", value: !ch.enabled };
+  if (dataSource) dataSource.sendCommand(node, cmd);
+  showToast(`通道 ${letter.toUpperCase()}: ${ch.enabled ? "关闭" : "开启"}`);
 }
 
-function sendCustomCommand() {
-  const input = document.querySelector("#cmdInput");
-  if (!input?.value.trim()) return;
-  if (dataSource) dataSource.sendCommand(input.value.trim());
-  showToast(`已发送: ${input.value.trim()}`);
-  input.value = "";
-}
-
-function sendCalibration(key) {
-  const input = document.querySelector(`#calib_${key}`);
+function sendChannelSetVoltage(letter) {
+  const input = document.querySelector(`#voltage_${letter}`);
   if (!input) return;
   const value = Number(input.value);
-  if (isNaN(value)) return;
-  const cmdMap = { invd: "INVD", outvd: "OUTVD", rnfa: "RNFA", rnfb: "RNFB", incd: "INCD" };
-  const cmd = (cmdMap[key] || key.toUpperCase()) + value;
-  if (dataSource) dataSource.sendCommand(cmd);
-  state.calibration[key] = value;
-  showToast(`已发送: ${cmd}`);
+  if (isNaN(value) || value < 0 || value > 48) { showToast("电压范围 0–48V"); return; }
+  const node = `channel_${letter}`;
+  const cmd = { cmd: "set_voltage", value };
+  if (dataSource) dataSource.sendCommand(node, cmd);
+  state[`channel_${letter}`].set_voltage = value;
+  showToast(`通道 ${letter.toUpperCase()}: 设定 ${value.toFixed(1)}V`);
 }
+
+function sendMpptSetMode(mode) {
+  if (dataSource) dataSource.sendCommand("mppt", { cmd: "set_charge_mode", value: mode });
+  showToast(`MPPT 模式: ${mode}`);
+}
+
+// ---- MQTT 配置保存 ----------------------------------------------------------
 
 function saveMqttConfigToState() {
   state.mqtt.brokerUrl = document.querySelector("#mqttBroker")?.value.trim() || state.mqtt.brokerUrl;
-  state.mqtt.deviceId = document.querySelector("#mqttDeviceId")?.value.trim() || "";
-  state.mqtt.username = document.querySelector("#mqttUsername")?.value.trim() || "";
-  state.mqtt.password = document.querySelector("#mqttPassword")?.value || "";
+  state.mqtt.deviceId   = document.querySelector("#mqttDeviceId")?.value.trim() || "";
+  state.mqtt.username   = document.querySelector("#mqttUsername")?.value.trim() || "";
+  state.mqtt.password   = document.querySelector("#mqttPassword")?.value || "";
   saveMqttConfig(state.mqtt);
   showToast("MQTT 配置已保存");
 }
@@ -783,6 +786,78 @@ function renderSettings() {
   `;
 }
 
+function renderDeviceConfigPanel() {
+  const btnLabel = state.deviceConnected ? "断开连接" : "连接设备";
+  const btnClass = state.deviceConnected ? "danger-button" : "button";
+
+  return `
+    <section class="panel">
+      <h2>设备连接</h2>
+      <div class="source-tabs">
+        <button class="tab-pill ${state.sourceMode==='sim'?'active':''}" type="button" data-action="source-mode" data-mode="sim">模拟数据</button>
+        <button class="tab-pill ${state.sourceMode==='mqtt'?'active':''}" type="button" data-action="source-mode" data-mode="mqtt">MQTT 网关</button>
+      </div>
+      ${state.sourceMode === "mqtt" ? renderMqttConfig() : renderSimInfo()}
+      <div class="field" style="margin-top:8px;">
+        <label for="sampleCount">图表采样数 (300–10000)</label>
+        <input id="sampleCount" type="number" value="${state.sampleCount}" min="300" max="10000" step="100" />
+      </div>
+      <div class="actions">
+        <button class="${btnClass}" type="button" data-action="device-connect">${btnLabel}</button>
+        ${state.streaming ? `<button class="button" type="button" data-action="stream-toggle">⏹ 停止采集</button>` : `<button class="button" type="button" data-action="stream-toggle" ${!state.deviceConnected?"disabled":""}>▶ 开始采集</button>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderSimInfo() {
+  return `<div class="sim-notice"><p class="subtle">使用本地模拟数据源。模拟 4 节点（MPPT + 3 通道）真实波形。</p></div>`;
+}
+
+function renderMqttConfig() {
+  const m = state.mqtt;
+  const ms = state.mqttStatus;
+  let statusBadge = "";
+  if (ms.state === "connected") statusBadge = '<span class="mqtt-badge good">● 已连接</span>';
+  else if (ms.state === "connecting" || ms.state === "reconnecting") statusBadge = '<span class="mqtt-badge warn">◉ ' + escapeHtml(ms.detail || "连接中") + '</span>';
+  else if (ms.state === "error") statusBadge = '<span class="mqtt-badge danger">✕ ' + escapeHtml(ms.detail || "错误") + '</span>';
+  else if (ms.state === "offline") statusBadge = '<span class="mqtt-badge warn">○ 离线</span>';
+
+  return `
+    <div class="form-grid mqtt-config">
+      <div class="field">
+        <label for="mqttBroker">Broker 地址 (WSS)</label>
+        <input id="mqttBroker" type="text" value="${escapeHtml(m.brokerUrl)}" placeholder="wss://broker.emqx.io:8084/mqtt" ${state.deviceConnected?"disabled":""} />
+      </div>
+      <div class="field">
+        <label for="mqttDeviceId">设备 ID</label>
+        <input id="mqttDeviceId" type="text" value="${escapeHtml(m.deviceId)}" placeholder="rk3506" ${state.deviceConnected?"disabled":""} />
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="mqttUsername">用户名</label>
+          <input id="mqttUsername" type="text" value="${escapeHtml(m.username)}" ${state.deviceConnected?"disabled":""} />
+        </div>
+        <div class="field">
+          <label for="mqttPassword">密码</label>
+          <input id="mqttPassword" type="password" value="${escapeHtml(m.password)}" ${state.deviceConnected?"disabled":""} />
+        </div>
+      </div>
+      <div class="mqtt-topics">
+        <div><strong>订阅</strong> <code>energy/${escapeHtml(m.deviceId||"{id}")}/mppt/telemetry</code> <code>channel/+/telemetry</code> …</div>
+        ${statusBadge ? `<div class="mqtt-status-row">${statusBadge}</div>` : ""}
+      </div>
+      <div class="actions">
+        <button class="button small-button" type="button" data-action="mqtt-save" ${state.deviceConnected?"disabled":""}>保存配置</button>
+      </div>
+    </div>
+  `;
+}
+
+// ============================================================
+//  Account / Profile / Version
+// ============================================================
+
 function renderAccountHero() {
   const label = state.cloudUser
     ? (state.cloudProfile?.display_name || state.cloudProfile?.username || state.cloudUser.email || "已登录")
@@ -795,7 +870,7 @@ function renderAccountHero() {
         <div class="account-avatar">${escapeHtml(getAvatarText(label))}</div>
         <div><h2>${escapeHtml(label)}</h2><p class="subtle">${escapeHtml(subtitle)}</p></div>
       </div>
-      <span class="type-pill ${state.cloudUser ? "good" : ""}">${escapeHtml(badge)}</span>
+      <span class="type-pill ${state.cloudUser?"good":""}">${escapeHtml(badge)}</span>
     </section>
   `;
 }
@@ -820,16 +895,23 @@ function renderProfileForm() {
   const p = state.cloudProfile || {};
   return `
     <section class="panel form-grid"><h2>个人资料</h2>
-      <div class="field"><label for="profileUsername">用户名</label><input id="profileUsername" type="text" value="${escapeHtml(p.username || "")}" /></div>
-      <div class="field"><label for="profileDisplay">昵称</label><input id="profileDisplay" type="text" value="${escapeHtml(p.display_name || "")}" /></div>
-      <div class="field"><label for="profileBio">简介</label><input id="profileBio" type="text" value="${escapeHtml(p.bio || "")}" /></div>
+      <div class="field"><label for="profileUsername">用户名</label><input id="profileUsername" type="text" value="${escapeHtml(p.username||"")}" /></div>
+      <div class="field"><label for="profileDisplay">昵称</label><input id="profileDisplay" type="text" value="${escapeHtml(p.display_name||"")}" /></div>
+      <div class="field"><label for="profileBio">简介</label><input id="profileBio" type="text" value="${escapeHtml(p.bio||"")}" /></div>
       <div class="actions"><button class="button" type="button" data-action="save-profile">保存</button></div>
     </section>
   `;
 }
 
+function renderVersionPanel() {
+  const v = state.appVersion;
+  return `
+    <section class="panel version-card"><div><span class="version-label">当前版本</span><strong>${escapeHtml(v.current||v.latest||"未知")}</strong><p class="subtle">${v.checking?"正在检查更新":v.updateAvailable?`发现新版本 ${v.latest}`:v.error?"版本检查失败":"已是最新版本"}</p></div>${v.updateAvailable?`<button class="button small-button" type="button" data-action="refresh-app">立即更新</button>`:""}</section>
+  `;
+}
+
 // ============================================================
-//  Auth
+//  Auth / Version / SW
 // ============================================================
 
 async function signInProvider(provider) {
@@ -845,26 +927,15 @@ async function saveProfile() {
     const d = cleanText(document.querySelector("#profileDisplay")?.value || "");
     if (!u) throw new Error("用户名不能为空");
     if (!d) throw new Error("昵称不能为空");
-    state.cloudProfile = await cloud.upsertProfile({ id: state.cloudUser.id, username: u, display_name: d, bio: cleanText(document.querySelector("#profileBio")?.value || "") });
+    state.cloudProfile = await cloud.upsertProfile({ id:state.cloudUser.id, username:u, display_name:d, bio:cleanText(document.querySelector("#profileBio")?.value||"") });
     showToast("个人资料已保存"); render();
   } catch (e) { showToast(`保存失败：${e.message}`); }
-}
-
-// ============================================================
-//  Version
-// ============================================================
-
-function renderVersionPanel() {
-  const v = state.appVersion;
-  return `
-    <section class="panel version-card"><div><span class="version-label">当前版本</span><strong>${escapeHtml(v.current || v.latest || "未知")}</strong><p class="subtle">${v.checking ? "正在检查更新" : v.updateAvailable ? `发现新版本 ${v.latest}` : v.error ? "版本检查失败" : "已是最新版本"}</p></div>${v.updateAvailable ? `<button class="button small-button" type="button" data-action="refresh-app">立即更新</button>` : ""}</section>
-  `;
 }
 
 async function checkAppVersion() {
   state.appVersion.checking = true; state.appVersion.error = ""; rerenderVersion();
   try {
-    const r = await fetch(`./version.json?t=${Date.now()}`, { cache: "no-store" });
+    const r = await fetch(`./version.json?t=${Date.now()}`, { cache:"no-store" });
     if (!r.ok) throw new Error(`version.json ${r.status}`);
     const latest = String((await r.json()).version || "").trim();
     if (!latest) throw new Error("version.json 缺少 version 字段");
@@ -874,7 +945,6 @@ async function checkAppVersion() {
   } catch (e) { state.appVersion.error = e.message; }
   finally { state.appVersion.checking = false; rerenderVersion(); }
 }
-
 function rerenderVersion() { if (state.view === "settings") render(); }
 
 async function refreshAppAssets() {
@@ -886,7 +956,6 @@ async function refreshAppAssets() {
     showToast("正在更新应用"); setTimeout(() => location.reload(), 300);
   } catch (e) { showToast("更新失败"); }
 }
-
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   navigator.serviceWorker.register("./sw.js").catch(() => {});
@@ -901,6 +970,6 @@ function showToast(msg) {
   toast.textContent = msg; toast.classList.add("is-visible");
   toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 2800);
 }
-function escapeHtml(v) { return String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
-function getAvatarText(l) { const t = String(l || "").trim(); return t ? t.slice(0, 1).toUpperCase() : "?"; }
-function cleanText(v) { return String(v || "").trim().replace(/\s+/g, " "); }
+function escapeHtml(v) { return String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function getAvatarText(l) { const t = String(l||"").trim(); return t ? t.slice(0,1).toUpperCase() : "?"; }
+function cleanText(v) { return String(v||"").trim().replace(/\s+/g," "); }

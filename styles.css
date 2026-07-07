@@ -763,6 +763,218 @@ h2 {
 .mqtt-badge.danger { color: var(--danger); }
 
 /* ============================================================
+   Node cards (MPPT + Channels)
+   ============================================================ */
+
+.node-card {
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.node-card:hover {
+  border-color: var(--accent-light);
+}
+
+.node-card--selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.node-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.node-icon {
+  font-size: 1.25rem;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-alt);
+  flex-shrink: 0;
+}
+
+.node-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  flex: 1;
+}
+
+.node-mode {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-alt);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.node-mode.good {
+  background: var(--good-bg);
+  color: var(--good);
+}
+
+.node-metrics-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.node-metric {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px;
+  background: var(--bg-alt);
+  border-radius: 6px;
+}
+
+.nm-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.nm-value {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.nm-value small {
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 2px;
+}
+
+.nm-value.subtle {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+
+/* SOC bar */
+.soc-bar {
+  position: relative;
+  height: 22px;
+  background: var(--pwm-track-bg);
+  border-radius: 11px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.soc-fill {
+  height: 100%;
+  border-radius: 11px;
+  transition: width 0.3s ease;
+  min-width: 0;
+}
+
+.soc-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+}
+
+.node-extra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.node-extra .danger { color: var(--danger); font-weight: 500; }
+
+.node-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.voltage-setter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+
+.voltage-input {
+  width: 72px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-family: var(--font);
+  color: var(--text);
+  text-align: right;
+}
+
+.voltage-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.voltage-unit {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* Node selector pills (above chart) */
+.node-selector {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.node-pill {
+  font-size: 0.8125rem;
+}
+
+/* System bar */
+.sys-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sys-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 0.8125rem;
+  color: var(--text);
+}
+
+.sys-item {
+  font-variant-numeric: tabular-nums;
+}
+
+.sys-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* ============================================================
    Responsive
    ============================================================ */
 
