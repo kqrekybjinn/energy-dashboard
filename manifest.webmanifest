@@ -1,0 +1,9 @@
+{
+  "name": "能源管理终端",
+  "short_name": "能源终端",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "icons": []
+}
