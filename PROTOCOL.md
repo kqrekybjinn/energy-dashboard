@@ -196,10 +196,54 @@ while True:
 
 ## 6. Broker 推荐
 
-| Broker | WSS 地址 | 免费额度 |
-|--------|---------|---------|
-| EMQX Cloud Serverless | `wss://{host}:8084/mqtt` | 100 设备 |
-| HiveMQ Cloud | `wss://{host}:8884/mqtt` | 100 设备 |
-| 自建 Mosquitto | `wss://{your-ip}:8084` | 无限 |
+本项目推荐 **EMQX**（自建 Docker 部署），已附带一键部署文件。
 
-> WSS 端口是关键——浏览器只能通过 WebSocket Secure 连接 MQTT。
+### 首选：EMQX（自建，Docker Compose）
+
+| 优势 | 说明 |
+|------|------|
+| CLI 管理 | `./broker-setup.sh` 全命令行操作，无需进 Dashboard |
+| WSS 原生 | `wss://<ip>:8084/mqtt` 浏览器直连 |
+| REST API | `http://<ip>:18083/api/v5` curl 脚本化管理 |
+| 热更新 | `emqx ctl conf reload` 不中断服务 |
+| 轻量 | 单节点 ~512MB RAM，Docker 秒级启动 |
+
+### 快速启动
+
+```bash
+cd broker/
+
+# 启动
+./broker-setup.sh up
+
+# 创建设备用户
+./broker-setup.sh add-user rk3506-gateway-001 mypassword
+
+# 授权 telemetry 发布
+./broker-setup.sh grant rk3506-gateway-001 energy/rk3506-gateway-001/telemetry pub
+
+# 授权 command 订阅
+./broker-setup.sh grant rk3506-gateway-001 energy/rk3506-gateway-001/command sub
+
+# 查看连接状态
+./broker-setup.sh clients
+```
+
+部署后 Dashboard 中 Broker 地址填：`wss://<服务器IP>:8084/mqtt`
+
+### 备选方案
+
+| Broker | WSS 地址 | 免费额度 | CLI |
+|--------|---------|---------|-----|
+| EMQX Cloud Serverless | `wss://{host}:8084/mqtt` | 100 设备 | REST API (curl) |
+| HiveMQ Cloud | `wss://{host}:8884/mqtt` | 100 设备 | REST API |
+| 自建 Mosquitto | `wss://{your-ip}:8084` | 无限 | `mosquitto_ctrl` |
+
+### 测试用公共 Broker
+
+开发测试可直接用 EMQX 公共沙箱（无认证，无持久化）：
+```
+wss://broker.emqx.io:8084/mqtt
+```
+
+> ⚠️ 公共 Broker 数据全网可见，生产环境务必切换到自建部署。

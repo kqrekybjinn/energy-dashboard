@@ -1,0 +1,64 @@
+# ============================================================
+#  能源管理终端 — EMQX MQTT Broker 部署
+#
+#  用法:
+#    docker compose up -d           # 启动
+#    docker compose down            # 停止
+#    ./broker-setup.sh              # CLI 配置向导
+#
+#  端口:
+#    1883  — MQTT (TCP, 网关直连)
+#    8883  — MQTTS (TLS)
+#    8083  — WebSocket (浏览器)
+#    8084  — WSS (浏览器安全连接)  ★ Dashboard 使用此端口
+#    18083 — Dashboard + REST API
+#
+#  要求: Docker 24+, 约 512MB RAM
+# ============================================================
+
+services:
+  emqx:
+    image: emqx/emqx:5.8.8
+    container_name: energy-broker
+    hostname: energy-broker
+    restart: unless-stopped
+
+    environment:
+      # 节点名 - 固定，避免重启丢失数据
+      - EMQX_NODE_NAME=emqx@energy-broker
+
+      # Dashboard 管理员
+      - EMQX_DASHBOARD__DEFAULT_USERNAME=admin
+      - EMQX_DASHBOARD__DEFAULT_PASSWORD=Energy2026!
+
+      # 匿名访问关闭 (强制认证)
+      - EMQX_ALLOW_ANONYMOUS=false
+
+      # HTTP API 认证
+      - EMQX_API_KEY__BOOTSTRAP_FILE=/opt/emqx/data/bootstrap_api_key
+
+      # 日志级别
+      - EMQX_LOG__CONSOLE_HANDLER__LEVEL=warning
+
+    ports:
+      - "1883:1883"    # MQTT
+      - "8883:8883"    # MQTTS
+      - "8083:8083"    # WebSocket
+      - "8084:8084"    # WSS (WebSocket Secure)
+      - "18083:18083"  # Dashboard + API
+
+    volumes:
+      - emqx_data:/opt/emqx/data
+      - emqx_log:/opt/emqx/log
+      # TLS 证书 (放置后取消注释)
+      # - ./certs:/etc/emqx/certs:ro
+
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  emqx_data:
+  emqx_log:
