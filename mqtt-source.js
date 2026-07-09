@@ -256,11 +256,12 @@ export function createMQTTSource() {
     sendCommand(node, cmd) {
       if (!client || !client.connected) {
         console.warn("[mqtt] sendCommand ignored — not connected");
-        return;
+        return false;
       }
       const cmdTopic = commandTopic(prefix, deviceId, node);
 
       client.publish(cmdTopic, JSON.stringify(cmd), { qos: 1 });
+      return true;
     },
 
     onData(cb) { onData = cb; },

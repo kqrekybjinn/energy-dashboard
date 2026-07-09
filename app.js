@@ -550,7 +550,7 @@ function createSimulationSource() {
     start() { running = true; t = 0; this._tick(); },
     stop() { running = false; if (timer) clearTimeout(timer); timer = null; },
     onData(fn) { cb = fn; },
-    sendCommand(node, cmd) { console.log("[SIM] CMD →", node, cmd); },
+    sendCommand(node, cmd) { console.log("[SIM] CMD →", node, cmd); return true; },
     _tick() {
       if (!running) return;
       t++;
@@ -654,6 +654,13 @@ function toggleStreamingSilent() {
 
 function onMqttStatus(event) {
   state.mqttStatus = { state: event.state, detail: event.detail || "" };
+  if (state.sourceMode === "mqtt") {
+    if (event.state === "connected") state.deviceConnected = true;
+    if (event.state === "error" || event.state === "disconnected" || event.state === "offline") {
+      state.deviceConnected = false;
+    }
+    render();
+  }
   if (event.state === "disconnected" && !state.deviceConnected) {
     state.mqttStatus = { state:"idle", detail:"" };
   }
@@ -762,7 +769,7 @@ function sendChannelToggle(letter) {
   if (!ch) return;
   const node = `channel_${letter}`;
   const cmd = { cmd: "set_enabled", value: !ch.enabled };
-  if (dataSource) dataSource.sendCommand(node, cmd);
+  if (!sendDeviceCommand(node, cmd)) return;
   showToast(`通道 ${letter.toUpperCase()}: ${ch.enabled ? "关闭" : "开启"}`);
 }
 
@@ -774,7 +781,7 @@ function sendChannelSetVoltage(letter) {
   if (isNaN(value) || value < 0 || value > max) { showToast(`电压范围 0-${max}V`); return; }
   const node = `channel_${letter}`;
   const cmd = { cmd: "set_voltage", value };
-  if (dataSource) dataSource.sendCommand(node, cmd);
+  if (!sendDeviceCommand(node, cmd)) return;
   state[`channel_${letter}`].set_voltage = value;
   showToast(`通道 ${letter.toUpperCase()}: 设定 ${value.toFixed(1)}V`);
 }
@@ -787,15 +794,28 @@ function sendChannelSetCurrent(letter) {
   if (isNaN(value) || value < 0 || value > max) { showToast(`限流范围 0-${max}A`); return; }
   const node = `channel_${letter}`;
   const cmd = { cmd: "set_current", value };
-  if (dataSource) dataSource.sendCommand(node, cmd);
+  if (!sendDeviceCommand(node, cmd)) return;
   state[`channel_${letter}`].set_current = value;
   state[`channel_${letter}`].current_limit = value;
   showToast(`通道 ${letter.toUpperCase()}: 限流 ${value.toFixed(1)}A`);
 }
 
 function sendMpptSetMode(mode) {
-  if (dataSource) dataSource.sendCommand("mppt", { cmd: "set_charge_mode", value: mode });
+  if (!sendDeviceCommand("mppt", { cmd: "set_charge_mode", value: mode })) return;
   showToast(`MPPT 模式: ${mode}`);
+}
+
+function sendDeviceCommand(node, cmd) {
+  if (!dataSource) {
+    showToast("请先连接设备");
+    return false;
+  }
+  const sent = dataSource.sendCommand(node, cmd);
+  if (!sent) {
+    showToast("MQTT 未连接，请检查密码并重新连接");
+    return false;
+  }
+  return true;
 }
 
 // ---- MQTT 配置保存 ----------------------------------------------------------
