@@ -1,6 +1,6 @@
 import { cloud, CLOUD_API_VERSION } from "./cloud.js";
 import { createMQTTSource } from "./mqtt-source.js";
-import { DEFAULT_MQTT_CONFIG, hasChannelStructureChange, normalizeMqttConfig } from "./protocol.js";
+import { DASHBOARD_RUNTIME_DEFAULTS, DEFAULT_MQTT_CONFIG, hasChannelStructureChange, normalizeMqttConfig } from "./protocol.js";
 
 const DB_NAME = "energy-dashboard-db";
 const DB_VERSION = 1;
@@ -43,7 +43,7 @@ const state = {
   // Data source
   sourceMode: "mqtt",      // "sim" | "mqtt"
   deviceConnected: false,
-  streaming: false,
+  streaming: DASHBOARD_RUNTIME_DEFAULTS.autoRecord,
   sampleCount: 300,
   chartMode: "wave",       // "wave" | "raw"
   selectedNode: "mppt",    // 波形图当前选中的节点
@@ -91,6 +91,7 @@ async function boot() {
   registerServiceWorker();
   checkAppVersion();
   render();
+  if (DASHBOARD_RUNTIME_DEFAULTS.autoConnect) startDefaultDeviceConnection();
 }
 
 // ============================================================
@@ -136,8 +137,6 @@ async function handleViewClick(event) {
   if (a === "refresh-app") await refreshAppAssets();
 
   // Device
-  if (a === "device-connect") await toggleDeviceConnection();
-  if (a === "stream-toggle") toggleStreaming();
   if (a === "chart-wave") { state.chartMode = "wave"; render(); }
   if (a === "chart-raw") { state.chartMode = "raw"; render(); }
 
@@ -162,8 +161,8 @@ async function handleViewClick(event) {
   if (a === "mqtt-save") saveMqttConfigToState();
   if (a === "source-mode") {
     state.sourceMode = target.dataset.mode;
-    if (state.deviceConnected) { disconnectDevice(); showToast(`已切换到 ${state.sourceMode==="mqtt"?"MQTT":"模拟"} 模式，请重新连接`); }
-    render();
+    startDefaultDeviceConnection();
+    showToast(`已切换到 ${state.sourceMode==="mqtt"?"MQTT":"模拟"} 模式`);
   }
 }
 
@@ -213,15 +212,12 @@ function renderDeviceBar() {
   const label = state.deviceConnected
     ? (state.sourceMode === "mqtt" ? `MQTT · ${escapeHtml(state.mqtt.deviceId)}` : "模拟数据")
     : "未连接";
-  const btnLabel = state.streaming ? "⏹ 停止" : state.deviceConnected ? "▶ 开始" : "连接";
-  const btnAction = state.streaming ? "stream-toggle" : state.deviceConnected ? "stream-toggle" : "device-connect";
 
   return `
     <section class="panel device-bar">
       <div class="device-bar-left">${dot}<span class="device-bar-label">${label}</span></div>
       <div class="device-bar-right">
-        ${state.deviceConnected ? `<span class="device-bar-samples">${state.sampleCount} 点</span>` : ""}
-        <button class="button small-button" type="button" data-action="${btnAction}">${btnLabel}</button>
+        <span class="device-bar-samples">${state.sampleCount} 点</span>
       </div>
     </section>
   `;
@@ -584,73 +580,23 @@ function createDataSource() {
   return createSimulationSource();
 }
 
-function disconnectDevice() {
-  if (state.streaming) toggleStreamingSilent();
-  if (dataSource) { dataSource.stop(); dataSource = null; }
-  state.deviceConnected = false;
-  state.mqttStatus = { state:"idle", detail:"" };
-}
-
-async function toggleDeviceConnection() {
-  if (state.deviceConnected) {
-    disconnectDevice();
-    render();
-    showToast("已断开连接");
-    return;
-  }
-
+function startDefaultDeviceConnection() {
+  if (dataSource) dataSource.stop();
   dataSource = createDataSource();
   dataSource.onData(onDeviceData);
   if (dataSource.onStatus) dataSource.onStatus(onMqttStatus);
-
-  if (state.sourceMode === "mqtt") {
-    try {
-      dataSource.start(state.mqtt.deviceId);
-      state.deviceConnected = true;
-      showToast("MQTT 已连接");
-    } catch (err) {
-      showToast(`连接失败: ${err.message}`);
-      dataSource.stop();
-      dataSource = null;
-    }
-  } else {
-    state.deviceConnected = true;
-    showToast("已连接（模拟模式）");
-  }
-  render();
-}
-
-function toggleStreaming() {
-  if (state.streaming) {
-    state.streaming = false;
-    destroyChart();
-    render();
-    showToast("已停止记录，实时数据继续更新");
-    return;
-  }
-
-  if (!state.deviceConnected) {
-    dataSource = createDataSource();
-    dataSource.onData(onDeviceData);
-    if (dataSource.onStatus) dataSource.onStatus(onMqttStatus);
-    if (state.sourceMode === "mqtt") {
-      dataSource.start(state.mqtt.deviceId);
-    }
-    state.deviceConnected = true;
-  }
-
-  state.streaming = true;
+  state.streaming = DASHBOARD_RUNTIME_DEFAULTS.autoRecord;
   state.nodeSeries = { mppt:[], channel_a:[], channel_b:[], channel_c:[] };
   state.channels = defaultChannels();
   state.rawLines = [];
+  if (state.sourceMode === "mqtt") {
+    state.deviceConnected = false;
+    dataSource.start(state.mqtt.deviceId);
+  } else {
+    state.deviceConnected = true;
+    dataSource.start();
+  }
   render();
-  showToast("开始记录波形");
-}
-
-function toggleStreamingSilent() {
-  state.streaming = false;
-  if (dataSource) dataSource.stop();
-  destroyChart();
 }
 
 function onMqttStatus(event) {
@@ -817,12 +763,12 @@ function sendMpptSetMode(mode) {
 
 function sendDeviceCommand(node, cmd) {
   if (!dataSource) {
-    showToast("请先连接设备");
+    showToast("MQTT 正在自动连接，请稍后重试");
     return false;
   }
   const sent = dataSource.sendCommand(node, cmd);
   if (!sent) {
-    showToast("MQTT 未连接，请检查密码并重新连接");
+    showToast("MQTT 未就绪，请检查密码或等待自动重连");
     return false;
   }
   return true;
@@ -837,6 +783,7 @@ function saveMqttConfigToState() {
   state.mqtt.password   = document.querySelector("#mqttPassword")?.value || "";
   saveMqttConfig(state.mqtt);
   showToast("MQTT 配置已保存");
+  if (state.sourceMode === "mqtt") startDefaultDeviceConnection();
 }
 
 // ============================================================
@@ -867,8 +814,9 @@ function renderSettings() {
 }
 
 function renderDeviceConfigPanel() {
-  const btnLabel = state.deviceConnected ? "断开连接" : "连接设备";
-  const btnClass = state.deviceConnected ? "danger-button" : "button";
+  const status = state.sourceMode === "mqtt"
+    ? (state.deviceConnected ? "MQTT 已连接" : `MQTT ${state.mqttStatus.detail || "连接中"}`)
+    : "模拟数据运行中";
 
   return `
     <section class="panel">
@@ -882,10 +830,7 @@ function renderDeviceConfigPanel() {
         <label for="sampleCount">图表采样数 (300–10000)</label>
         <input id="sampleCount" type="number" value="${state.sampleCount}" min="300" max="10000" step="100" />
       </div>
-      <div class="actions">
-        <button class="${btnClass}" type="button" data-action="device-connect">${btnLabel}</button>
-        ${state.streaming ? `<button class="button" type="button" data-action="stream-toggle">⏹ 停止采集</button>` : `<button class="button" type="button" data-action="stream-toggle" ${!state.deviceConnected?"disabled":""}>▶ 开始采集</button>`}
-      </div>
+      <p class="subtle">${escapeHtml(status)}，页面会自动连接并持续刷新图表。</p>
     </section>
   `;
 }

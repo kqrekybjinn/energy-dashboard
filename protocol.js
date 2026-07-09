@@ -7,6 +7,11 @@ export const DEFAULT_MQTT_CONFIG = {
   password: "",
 };
 
+export const DASHBOARD_RUNTIME_DEFAULTS = {
+  autoConnect: true,
+  autoRecord: true,
+};
+
 const LEGACY_DEFAULT_MQTT_CONFIG = {
   brokerUrl: "ws://192.168.137.1:8083/mqtt",
   deviceId: "rk3506",

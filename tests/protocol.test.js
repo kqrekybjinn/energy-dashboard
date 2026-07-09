@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { DEFAULT_MQTT_CONFIG, commandTopic, hasChannelStructureChange, normalizeMqttConfig } from "../protocol.js";
+import {
+  DASHBOARD_RUNTIME_DEFAULTS,
+  DEFAULT_MQTT_CONFIG,
+  commandTopic,
+  hasChannelStructureChange,
+  normalizeMqttConfig
+} from "../protocol.js";
 
 assert.equal(
   DEFAULT_MQTT_CONFIG.brokerUrl,
@@ -9,6 +15,8 @@ assert.equal(
 assert.equal(DEFAULT_MQTT_CONFIG.deviceId, "rk3506");
 assert.equal(DEFAULT_MQTT_CONFIG.username, "rk3506");
 assert.equal(DEFAULT_MQTT_CONFIG.password, "", "Do not commit the EMQX password into static assets");
+assert.equal(DASHBOARD_RUNTIME_DEFAULTS.autoConnect, true, "dashboard should connect to MQTT automatically");
+assert.equal(DASHBOARD_RUNTIME_DEFAULTS.autoRecord, true, "chart should record telemetry by default");
 
 assert.equal(commandTopic("energy", "rk3506", "channel_a"), "energy/rk3506/channel/a/command");
 assert.equal(commandTopic("energy", "rk3506", "channel_b"), "energy/rk3506/channel/b/command");
