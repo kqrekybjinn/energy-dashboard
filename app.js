@@ -46,7 +46,7 @@ const state = {
   streaming: DASHBOARD_RUNTIME_DEFAULTS.autoRecord,
   sampleCount: 300,
   chartMode: "wave",       // "wave" | "raw"
-  selectedNode: "mppt",    // 波形图当前选中的节点
+  selectedNode: "channel_a", // 波形图当前选中的节点
 
   // Multi-channel live data
   mppt: emptyMPPT(),
@@ -187,18 +187,21 @@ function render() {
 // ============================================================
 
 function renderDashboard() {
+  if (state.selectedNode === "mppt") {
+    state.selectedNode = "channel_a";
+    rebuildChannels();
+  }
   view.innerHTML = `
     <div class="dashboard-grid">
       <div class="dash-left">
         ${renderDeviceBar()}
-        ${renderNodeCardMPPT()}
         ${renderNodeCardChannel("a")}
         ${renderNodeCardChannel("b")}
         ${renderNodeCardChannel("c")}
         ${renderSystemBar()}
       </div>
       <div class="dash-right">
-        ${renderChartPanel()}
+        ${renderChartPanel(["channel_a", "channel_b", "channel_c"])}
       </div>
     </div>
   `;
@@ -411,11 +414,12 @@ function defaultChannels() {
   return cfg.map((c) => ({ ...c, data: [] }));
 }
 
-function renderChartPanel() {
+function renderChartPanel(allowedNodes = ["mppt", "channel_a", "channel_b", "channel_c"]) {
   const nodeNames = {
     mppt: "☀ MPPT",
     channel_a: "⚡ 通道 A", channel_b: "⚡ 通道 B", channel_c: "⚡ 通道 C",
   };
+  const visibleNodes = Object.entries(nodeNames).filter(([key]) => allowedNodes.includes(key));
 
   return `
     <section class="panel chart-panel">
@@ -427,7 +431,7 @@ function renderChartPanel() {
         </div>
       </div>
       <div class="node-selector">
-        ${Object.entries(nodeNames).map(([k,v]) =>
+        ${visibleNodes.map(([k,v]) =>
           `<button class="tab-pill node-pill ${state.selectedNode===k?'active':''}" type="button" data-action="select-node" data-node="${k}">${v}</button>`
         ).join("")}
       </div>
@@ -791,12 +795,23 @@ function saveMqttConfigToState() {
 // ============================================================
 
 function renderData() {
+  if (state.selectedNode !== "mppt") {
+    state.selectedNode = "mppt";
+    rebuildChannels();
+  }
   view.innerHTML = `
-    <section class="panel">
-      <h2>数据</h2>
-      <p class="subtle">数据管理页面 - 开发中</p>
-    </section>
+    <div class="dashboard-grid">
+      <div class="dash-left">
+        ${renderDeviceBar()}
+        ${renderNodeCardMPPT()}
+        ${renderSystemBar()}
+      </div>
+      <div class="dash-right">
+        ${renderChartPanel(["mppt"])}
+      </div>
+    </div>
   `;
+  if (state.chartMode === "wave" && state.streaming) initChart();
 }
 
 // ============================================================
