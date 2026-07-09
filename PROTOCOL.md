@@ -79,18 +79,20 @@ Topic 按 `设备 → 节点 → 方向` 分层。
 ```json
 {
   "ts": 1751894400123,
-  "solar_voltage": 55.2,
-  "solar_current": 2.51,
-  "solar_power": 138.6,
-  "battery_voltage": 24.3,
-  "battery_current": 5.1,
-  "battery_power": 123.9,
-  "battery_soc": 78.5,
-  "battery_temp": 32.1,
+  "solar_voltage": 18.3,
+  "solar_current": 1.85,
+  "solar_power": 33.9,
+  "battery_voltage": 15.48,
+  "battery_current": 2.05,
+  "battery_power": 31.7,
+  "battery_soc": 72.0,
+  "battery_temp": 28.6,
   "charge_mode": "MPPT",
-  "pwm_duty": 220,
-  "efficiency": 93.2,
-  "error_code": 0
+  "pwm_duty": 168,
+  "efficiency": 91.8,
+  "error_code": 0,
+  "today_wh": 384,
+  "total_wh": 12760
 }
 ```
 
@@ -107,6 +109,8 @@ Topic 按 `设备 → 节点 → 方向` 分层。
 | `pwm_duty` | number | 0-255 | PWM 占空比 |
 | `efficiency` | number | % | 转换效率 |
 | `error_code` | number | — | 0 正常 |
+| `today_wh` | number | Wh | 今日累计发电量 |
+| `total_wh` | number | Wh | 总累计发电量 |
 
 ### 3.2 通道 `energy/{id}/channel/{a|b|c}/telemetry`
 
@@ -114,12 +118,16 @@ Topic 按 `设备 → 节点 → 方向` 分层。
 {
   "ts": 1751894400123,
   "enabled": true,
-  "label": "12V 路由",
+  "label": "直流电源A",
+  "type": "dc_supply",
   "set_voltage": 12.0,
+  "set_current": 1.8,
+  "current_limit": 1.8,
   "actual_voltage": 12.05,
   "actual_current": 1.25,
   "actual_power": 15.06,
   "temperature": 38.5,
+  "range": { "voltage_max": 30.0, "current_max": 5.0 },
   "error_code": 0
 }
 ```
@@ -128,11 +136,15 @@ Topic 按 `设备 → 节点 → 方向` 分层。
 |------|------|------|------|
 | `enabled` | bool | — | 输出开关 |
 | `label` | string | — | 用户自定义名（语音可设） |
+| `type` | string | — | `dc_supply` / `ac_switch` |
 | `set_voltage` | number | V | 设定的目标电压 |
+| `set_current` | number | A | 设定的限流值 |
+| `current_limit` | number | A | 限流状态回传，通常等于 `set_current` |
 | `actual_voltage` | number | V | 实际输出电压 |
 | `actual_current` | number | A | 实际输出电流 |
 | `actual_power` | number | W | 实际输出功率 |
 | `temperature` | number | °C | 节点温度 |
+| `range` | object | — | 可选，直流通道输出范围 |
 | `error_code` | number | — | 0 正常 |
 
 ### 3.3 系统状态 `energy/{id}/system/status`
@@ -169,11 +181,11 @@ Topic 按 `设备 → 节点 → 方向` 分层。
 ```json
 {
   "ts": 1751894400123,
-  "mppt": { "solar_power": 138.6, "battery_soc": 78.5, "battery_voltage": 24.3 },
+  "mppt": { "solar_power": 33.9, "battery_soc": 72.0, "battery_voltage": 15.48 },
   "channel_a": { "enabled": true, "actual_voltage": 12.05, "actual_power": 15.06 },
-  "channel_b": { "enabled": false, "actual_voltage": 0, "actual_power": 0 },
-  "channel_c": { "enabled": true, "actual_voltage": 24.1, "actual_power": 12.53 },
-  "total_output_power": 27.59,
+  "channel_b": { "enabled": true, "actual_voltage": 23.9, "actual_power": 21.5 },
+  "channel_c": { "enabled": true, "actual_voltage": 220, "actual_power": 136.4 },
+  "total_output_power": 172.96,
   "system": { "signal_dbm": -75, "uptime_s": 36000 }
 }
 ```
@@ -187,6 +199,9 @@ Topic 按 `设备 → 节点 → 方向` 分层。
 ```json
 // 设置目标电压
 { "cmd": "set_voltage", "value": 12.0 }
+
+// 设置限流
+{ "cmd": "set_current", "value": 1.8 }
 
 // 开关通道
 { "cmd": "set_enabled", "value": true }
@@ -272,7 +287,20 @@ Dashboard 实时收到更新，无需轮询。
 
 ## 7. Broker 部署
 
-当前使用 **EMQX Cloud 国内版（深圳）**。
+RK3506 网关和 Web Dashboard 必须连接到同一个 EMQX broker：
+
+- RK3506 网关：MQTT TCP `mqtt://<broker-ip>:1883`
+- Web Dashboard：浏览器 MQTT over WebSocket `ws://<broker-ip>:8083/mqtt`，HTTPS 页面使用 `wss://<broker-domain>:8084/mqtt`
+
+本地联调默认：
+
+| 项 | 值 |
+|----|-----|
+| TCP 地址 | `mqtt://192.168.137.1:1883` |
+| WebSocket 地址 | `ws://192.168.137.1:8083/mqtt` |
+| 默认设备 | `rk3506` |
+
+云端部署可使用 **EMQX Cloud 国内版（深圳）**。
 
 | 项 | 值 |
 |----|-----|

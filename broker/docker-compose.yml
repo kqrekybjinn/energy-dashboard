@@ -31,8 +31,9 @@ services:
       - EMQX_DASHBOARD__DEFAULT_USERNAME=admin
       - EMQX_DASHBOARD__DEFAULT_PASSWORD=Energy2026!
 
-      # 匿名访问关闭 (强制认证)
-      - EMQX_ALLOW_ANONYMOUS=false
+      # 本地联调默认允许匿名访问，RK3506 TCP 与浏览器 WS 可直接同步。
+      # 上公网前改为 false，并配置 RK3506 的 DEMO_MQTT_USER / DEMO_MQTT_PASS。
+      - EMQX_ALLOW_ANONYMOUS=true
 
       # HTTP API 认证
       - EMQX_API_KEY__BOOTSTRAP_FILE=/opt/emqx/data/bootstrap_api_key

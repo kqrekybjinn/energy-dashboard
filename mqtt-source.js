@@ -6,6 +6,26 @@
 
 // ---- helpers ----------------------------------------------------------------
 
+const MQTT_CONFIG_KEY = "energy-dashboard-mqtt-config";
+const DEFAULT_MQTT = {
+  brokerUrl: "ws://192.168.137.1:8083/mqtt",
+  deviceId: "rk3506",
+  username: "",
+  password: "",
+};
+
+function loadMqttConfig() {
+  let cfg = {};
+  try { cfg = JSON.parse(localStorage.getItem(MQTT_CONFIG_KEY) || "null") || {}; }
+  catch { cfg = {}; }
+  return {
+    brokerUrl: cfg.brokerUrl || localStorage.getItem("mqtt_broker") || DEFAULT_MQTT.brokerUrl,
+    deviceId: cfg.deviceId || localStorage.getItem("mqtt_device_id") || DEFAULT_MQTT.deviceId,
+    username: cfg.username ?? localStorage.getItem("mqtt_username") ?? DEFAULT_MQTT.username,
+    password: cfg.password ?? localStorage.getItem("mqtt_password") ?? DEFAULT_MQTT.password,
+  };
+}
+
 function t(base, path) {
   const b = base.replace(/\/$/, "");
   return `${b}/${path.replace(/^\//, "")}`;
@@ -27,6 +47,8 @@ function emptyChannel(letter) {
     letter, enabled: false,
     label: `通道 ${letter.toUpperCase()}`,
     set_voltage: 0,
+    set_current: 0,
+    current_limit: 0,
     actual_voltage: 0, actual_current: 0, actual_power: 0,
     temperature: 0, error_code: 0,
   };
@@ -57,6 +79,8 @@ function normalizeChannel(raw) {
     enabled:        raw.enabled        ?? raw.state     ?? raw.output    ?? false,
     label:          raw.label          ?? raw.name      ?? "",
     set_voltage:    raw.set_voltage    ?? raw.setV      ?? raw.target_voltage ?? 0,
+    set_current:    raw.set_current    ?? raw.current_limit ?? raw.setI ?? raw.target_current ?? 0,
+    current_limit:  raw.current_limit  ?? raw.set_current ?? raw.setI ?? raw.target_current ?? 0,
     actual_voltage: raw.actual_voltage ?? raw.voltage   ?? raw.Vout      ?? raw.v ?? 0,
     actual_current: raw.actual_current ?? raw.current   ?? raw.Iout      ?? raw.i ?? 0,
     actual_power:   raw.actual_power   ?? raw.power     ?? raw.Pout      ?? 0,
@@ -146,11 +170,10 @@ export function createMQTTSource() {
   function connect() {
     if (!deviceId) return;
 
-    const brokerUrl  = localStorage.getItem("mqtt_broker")  || "wss://w0378faf.ala.cn-shenzhen.emqxsl.cn:8084/mqtt";
-    const username   = localStorage.getItem("mqtt_username") || "rk3506";
-    const password   = localStorage.getItem("mqtt_password") || "";
-
-    if (!password) { reportStatus("disconnected", "请先在设置中填写 MQTT 密码"); return; }
+    const cfg = loadMqttConfig();
+    const brokerUrl = cfg.brokerUrl;
+    const username = cfg.username || "";
+    const password = cfg.password || "";
 
     reportStatus("connecting");
 
@@ -166,13 +189,17 @@ export function createMQTTSource() {
     ];
 
     try {
-      client = mqtt.connect(brokerUrl, {
+      const options = {
         protocolVersion: 5,
         clientId: `web_${deviceId}_${Date.now()}`,
-        username, password,
         clean: true, keepalive: 30,
         connectTimeout: 10000,
         reconnectPeriod: 0,
+      };
+      if (username) options.username = username;
+      if (password) options.password = password;
+      client = mqtt.connect(brokerUrl, {
+        ...options,
       });
     } catch (e) {
       reportStatus("error", `mqtt.connect 失败: ${e.message}`);
@@ -224,7 +251,8 @@ export function createMQTTSource() {
 
   return {
     start(id, pfx) {
-      deviceId = id || localStorage.getItem("mqtt_device_id") || "rk3506";
+      const cfg = loadMqttConfig();
+      deviceId = id || cfg.deviceId || DEFAULT_MQTT.deviceId;
       prefix   = pfx || "energy";
       started  = true;
       disconnect();

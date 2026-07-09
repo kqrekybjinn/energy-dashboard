@@ -6,17 +6,29 @@ const DB_VERSION = 1;
 const APP_VERSION_KEY = "energy-dashboard-app-version";
 const SW_CACHE_PREFIX = "energy-dashboard-";
 const MQTT_CONFIG_KEY = "energy-dashboard-mqtt-config";
+const DEFAULT_MQTT_CONFIG = {
+  brokerUrl: "ws://192.168.137.1:8083/mqtt",
+  deviceId: "rk3506",
+  username: "",
+  password: "",
+};
 
 function loadMqttConfig() {
   try { return JSON.parse(localStorage.getItem(MQTT_CONFIG_KEY) || "null") || {}; }
   catch { return {}; }
 }
-function saveMqttConfig(cfg) { localStorage.setItem(MQTT_CONFIG_KEY, JSON.stringify(cfg)); }
+function saveMqttConfig(cfg) {
+  localStorage.setItem(MQTT_CONFIG_KEY, JSON.stringify(cfg));
+  localStorage.setItem("mqtt_broker", cfg.brokerUrl || "");
+  localStorage.setItem("mqtt_device_id", cfg.deviceId || "");
+  localStorage.setItem("mqtt_username", cfg.username || "");
+  localStorage.setItem("mqtt_password", cfg.password || "");
+}
 
 // ---- 默认空帧 ---------------------------------------------------------------
 
 function emptyMPPT() { return { solar_voltage:0, solar_current:0, solar_power:0, battery_voltage:0, battery_current:0, battery_power:0, battery_soc:0, battery_temp:0, charge_mode:"OFF", pwm_duty:0, efficiency:0, error_code:0 }; }
-function emptyChannel(letter) { return { letter, enabled:false, label:`通道 ${letter.toUpperCase()}`, set_voltage:0, actual_voltage:0, actual_current:0, actual_power:0, temperature:0, error_code:0 }; }
+function emptyChannel(letter) { return { letter, enabled:false, label:`通道 ${letter.toUpperCase()}`, set_voltage:0, set_current:0, current_limit:0, actual_voltage:0, actual_current:0, actual_power:0, temperature:0, error_code:0 }; }
 
 // ---- 应用状态 ---------------------------------------------------------------
 
@@ -27,7 +39,7 @@ const state = {
   appVersion: { current: localStorage.getItem(APP_VERSION_KEY) || "", latest: "", checking: true, updateAvailable: false, error: "" },
 
   // Data source
-  sourceMode: "sim",       // "sim" | "mqtt"
+  sourceMode: "mqtt",      // "sim" | "mqtt"
   deviceConnected: false,
   streaming: false,
   sampleCount: 300,
@@ -47,10 +59,10 @@ const state = {
 
   // MQTT config
   mqtt: {
-    brokerUrl: loadMqttConfig().brokerUrl || "wss://w0378faf.ala.cn-shenzhen.emqxsl.cn:8084/mqtt",
-    deviceId: loadMqttConfig().deviceId || "rk3506",
-    username: loadMqttConfig().username || "rk3506",
-    password: loadMqttConfig().password || "",
+    brokerUrl: loadMqttConfig().brokerUrl || DEFAULT_MQTT_CONFIG.brokerUrl,
+    deviceId: loadMqttConfig().deviceId || DEFAULT_MQTT_CONFIG.deviceId,
+    username: loadMqttConfig().username ?? DEFAULT_MQTT_CONFIG.username,
+    password: loadMqttConfig().password ?? DEFAULT_MQTT_CONFIG.password,
   },
   mqttStatus: { state:"idle", detail:"" },
   mqttLogs: [],
@@ -136,6 +148,7 @@ async function handleViewClick(event) {
   // Channel control
   if (a === "ch-toggle") sendChannelToggle(target.dataset.channel);
   if (a === "ch-set-voltage") sendChannelSetVoltage(target.dataset.channel);
+  if (a === "ch-set-current") sendChannelSetCurrent(target.dataset.channel);
   if (a === "mppt-set-mode") sendMpptSetMode(target.dataset.mode);
 
   // System
@@ -270,6 +283,7 @@ function renderNodeCardMPPT() {
 function renderNodeCardChannel(letter) {
   const ch = state[`channel_${letter}`];
   const selected = state.selectedNode === `channel_${letter}` ? " node-card--selected" : "";
+  const isAC = ch.type === "ac_switch" || /交流/.test(ch.label || "");
   const statusBadge = ch.enabled
     ? '<span class="node-mode good">已开启</span>'
     : '<span class="node-mode">已关闭</span>';
@@ -288,7 +302,7 @@ function renderNodeCardChannel(letter) {
           <span class="nm-value" id="live-ch${letter}-v">${ch.actual_voltage.toFixed(2)}<small>V</small></span>
         </div>
         <div class="node-metric">
-          <span class="nm-label">设定电压</span>
+          <span class="nm-label">${isAC ? "额定电压" : "设定电压"}</span>
           <span class="nm-value">${ch.set_voltage.toFixed(2)}<small>V</small></span>
         </div>
       </div>
@@ -308,11 +322,18 @@ function renderNodeCardChannel(letter) {
       </div>
       ` : `<div class="node-metric"><span class="nm-value subtle">通道未开启</span></div>`}
       <div class="node-actions">
+        ${isAC ? "" : `
         <div class="voltage-setter">
-          <input class="voltage-input" id="voltage_${letter}" type="number" value="${ch.set_voltage || 5.0}" step="0.1" min="0" max="48" />
+          <input class="voltage-input" id="voltage_${letter}" type="number" value="${ch.set_voltage || 5.0}" step="0.1" min="0" max="${letter === "b" ? 60 : 30}" />
           <span class="voltage-unit">V</span>
           <button class="button small-button" type="button" data-action="ch-set-voltage" data-channel="${letter}">设定</button>
         </div>
+        <div class="voltage-setter">
+          <input class="voltage-input" id="current_${letter}" type="number" value="${ch.set_current || ch.current_limit || 1.0}" step="0.1" min="0" max="${letter === "b" ? 3 : 5}" />
+          <span class="voltage-unit">A</span>
+          <button class="button small-button" type="button" data-action="ch-set-current" data-channel="${letter}">限流</button>
+        </div>
+        `}
         <button class="${ch.enabled ? 'danger-button' : 'button'} small-button" type="button" data-action="ch-toggle" data-channel="${letter}">
           ${ch.enabled ? '关闭' : '开启'}
         </button>
@@ -494,30 +515,30 @@ function createSimulationSource() {
   let running = false, timer = null, cb = null, t = 0;
 
   function tickMPPT() {
-    const sv = 55 + 10 * Math.sin(t * 0.01) + (Math.random() - 0.5) * 2;
-    const si = Math.max(0.1, 2.5 + 1.5 * Math.sin(t * 0.008) + (Math.random() - 0.5) * 0.3);
+    const sv = 18.2 + 1.4 * Math.sin(t * 0.01) + (Math.random() - 0.5) * 0.3;
+    const si = Math.max(0.1, 1.4 + 1.1 * Math.sin(t * 0.008) + (Math.random() - 0.5) * 0.2);
     const sp = sv * si;
-    const bv = 24 + Math.sin(t * 0.003) * 1.5 + (Math.random() - 0.5) * 0.2;
-    const bi = 5 + Math.sin(t * 0.005) * 2 + (Math.random() - 0.5) * 0.5;
+    const soc = Math.min(100, Math.max(0, 72 + 5 * Math.sin(t * 0.002)));
+    const bv = 12.0 + soc * 0.048 + Math.sin(t * 0.003) * 0.08;
+    const bi = Math.max(0.1, (sp * 0.92) / bv);
     const bp = bv * bi;
-    const soc = Math.min(100, Math.max(0, 78 + 5 * Math.sin(t * 0.002)));
     const eff = sp > 0 ? Math.min(98, (bp / sp) * 100) : 0;
     return {
       solar_voltage: sv, solar_current: si, solar_power: sp,
       battery_voltage: bv, battery_current: bi, battery_power: bp,
-      battery_soc: soc, battery_temp: 32 + Math.sin(t * 0.002) * 3 + (Math.random() - 0.5) * 1,
+      battery_soc: soc, battery_temp: 28 + Math.sin(t * 0.002) * 2 + (Math.random() - 0.5) * 0.8,
       charge_mode: t % 100 < 95 ? "MPPT" : "FLOAT",
       pwm_duty: Math.min(255, Math.round(eff * 2.55)),
       efficiency: eff, error_code: 0,
     };
   }
 
-  function tickChannel(enabled, baseV) {
-    if (!enabled) return { letter:"", enabled:false, label:"", set_voltage:baseV, actual_voltage:0, actual_current:0, actual_power:0, temperature:0, error_code:0 };
+  function tickChannel(enabled, baseV, label, type = "dc_supply", limitA = 1.0) {
+    if (!enabled) return { letter:"", enabled:false, label, type, set_voltage:baseV, set_current:limitA, current_limit:limitA, actual_voltage:0, actual_current:0, actual_power:0, temperature:0, error_code:0 };
     const av = baseV + (Math.random() - 0.5) * 0.2;
-    const ac = 0.5 + Math.random() * 2;
+    const ac = type === "ac_switch" ? 0.45 + Math.random() * 0.25 : Math.min(limitA, 0.4 + Math.random() * limitA);
     return {
-      letter:"", enabled:true, label:"", set_voltage: baseV,
+      letter:"", enabled:true, label, type, set_voltage: baseV, set_current: limitA, current_limit: limitA,
       actual_voltage: av, actual_current: ac, actual_power: av * ac,
       temperature: 35 + (Math.random() - 0.5) * 10, error_code: 0,
     };
@@ -533,9 +554,9 @@ function createSimulationSource() {
       t++;
       const frame = {
         mppt: tickMPPT(),
-        channel_a: tickChannel(t % 30 > 15, 12),
-        channel_b: tickChannel(t % 50 > 30, 5),
-        channel_c: tickChannel(t % 40 > 10, 24),
+        channel_a: tickChannel(t % 30 > 15, 12, "直流电源A", "dc_supply", 1.8),
+        channel_b: tickChannel(t % 50 > 30, 24, "直流电源B", "dc_supply", 0.9),
+        channel_c: tickChannel(t % 40 > 10, 220, "交流输出", "ac_switch"),
         system: {
           cpu_pct: 20 + Math.random() * 15,
           mem_mb: Math.round(80 + Math.random() * 30),
@@ -735,12 +756,27 @@ function sendChannelSetVoltage(letter) {
   const input = document.querySelector(`#voltage_${letter}`);
   if (!input) return;
   const value = Number(input.value);
-  if (isNaN(value) || value < 0 || value > 48) { showToast("电压范围 0–48V"); return; }
+  const max = letter === "b" ? 60 : 30;
+  if (isNaN(value) || value < 0 || value > max) { showToast(`电压范围 0-${max}V`); return; }
   const node = `channel_${letter}`;
   const cmd = { cmd: "set_voltage", value };
   if (dataSource) dataSource.sendCommand(node, cmd);
   state[`channel_${letter}`].set_voltage = value;
   showToast(`通道 ${letter.toUpperCase()}: 设定 ${value.toFixed(1)}V`);
+}
+
+function sendChannelSetCurrent(letter) {
+  const input = document.querySelector(`#current_${letter}`);
+  if (!input) return;
+  const value = Number(input.value);
+  const max = letter === "b" ? 3 : 5;
+  if (isNaN(value) || value < 0 || value > max) { showToast(`限流范围 0-${max}A`); return; }
+  const node = `channel_${letter}`;
+  const cmd = { cmd: "set_current", value };
+  if (dataSource) dataSource.sendCommand(node, cmd);
+  state[`channel_${letter}`].set_current = value;
+  state[`channel_${letter}`].current_limit = value;
+  showToast(`通道 ${letter.toUpperCase()}: 限流 ${value.toFixed(1)}A`);
 }
 
 function sendMpptSetMode(mode) {
@@ -826,8 +862,8 @@ function renderMqttConfig() {
   return `
     <div class="form-grid mqtt-config">
       <div class="field">
-        <label for="mqttBroker">Broker 地址 (WSS)</label>
-        <input id="mqttBroker" type="text" value="${escapeHtml(m.brokerUrl)}" placeholder="wss://broker.emqx.io:8084/mqtt" ${state.deviceConnected?"disabled":""} />
+        <label for="mqttBroker">Broker 地址 (WS/WSS)</label>
+        <input id="mqttBroker" type="text" value="${escapeHtml(m.brokerUrl)}" placeholder="ws://192.168.137.1:8083/mqtt" ${state.deviceConnected?"disabled":""} />
       </div>
       <div class="field">
         <label for="mqttDeviceId">设备 ID</label>
