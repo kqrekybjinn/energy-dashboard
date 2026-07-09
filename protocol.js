@@ -41,3 +41,10 @@ export function commandTopic(prefix, deviceId, node) {
   if(String(node).startsWith("channel_")) return topic(prefix, deviceId, `${String(node).replace("_", "/")}/command`);
   return topic(prefix, deviceId, `${node}/command`);
 }
+
+export function hasChannelStructureChange(before = {}, after = {}) {
+  return Boolean(before.enabled) !== Boolean(after.enabled) ||
+    Number(before.set_voltage ?? 0) !== Number(after.set_voltage ?? 0) ||
+    Number(before.set_current ?? before.current_limit ?? 0) !== Number(after.set_current ?? after.current_limit ?? 0) ||
+    Number(before.current_limit ?? before.set_current ?? 0) !== Number(after.current_limit ?? after.set_current ?? 0);
+}

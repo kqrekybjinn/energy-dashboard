@@ -1,6 +1,6 @@
 import { cloud, CLOUD_API_VERSION } from "./cloud.js";
 import { createMQTTSource } from "./mqtt-source.js";
-import { DEFAULT_MQTT_CONFIG, normalizeMqttConfig } from "./protocol.js";
+import { DEFAULT_MQTT_CONFIG, hasChannelStructureChange, normalizeMqttConfig } from "./protocol.js";
 
 const DB_NAME = "energy-dashboard-db";
 const DB_VERSION = 1;
@@ -662,6 +662,12 @@ function onMqttStatus(event) {
 // ---- 统一数据回调 -----------------------------------------------------------
 
 function onDeviceData(frame) {
+  const before = {
+    channel_a: { ...state.channel_a },
+    channel_b: { ...state.channel_b },
+    channel_c: { ...state.channel_c },
+  };
+
   // Update multi-channel state
   if (frame.mppt)      state.mppt      = { ...state.mppt, ...frame.mppt };
   if (frame.channel_a) state.channel_a = { ...state.channel_a, ...frame.channel_a, letter:"a" };
@@ -669,6 +675,11 @@ function onDeviceData(frame) {
   if (frame.channel_c) state.channel_c = { ...state.channel_c, ...frame.channel_c, letter:"c" };
   if (frame.system)    state.system    = { ...state.system, ...frame.system };
   if (frame.voice)     state.voice     = frame.voice;
+
+  const needsRerender =
+    (frame.channel_a && hasChannelStructureChange(before.channel_a, state.channel_a)) ||
+    (frame.channel_b && hasChannelStructureChange(before.channel_b, state.channel_b)) ||
+    (frame.channel_c && hasChannelStructureChange(before.channel_c, state.channel_c));
 
   if (state.streaming) {
     // Push to per-node time series
@@ -701,6 +712,7 @@ function onDeviceData(frame) {
   if (!chartTimer) {
     chartTimer = requestAnimationFrame(() => {
       chartTimer = null;
+      if (needsRerender && state.view === "dashboard") render();
       if (state.streaming) updateChart();
       updateLiveDisplays();
     });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { DEFAULT_MQTT_CONFIG, commandTopic, normalizeMqttConfig } from "../protocol.js";
+import { DEFAULT_MQTT_CONFIG, commandTopic, hasChannelStructureChange, normalizeMqttConfig } from "../protocol.js";
 
 assert.equal(
   DEFAULT_MQTT_CONFIG.brokerUrl,
@@ -26,6 +26,22 @@ assert.equal(
   normalizeMqttConfig({ brokerUrl: "ws://custom-broker:8083/mqtt", deviceId: "abc" }).brokerUrl,
   "ws://custom-broker:8083/mqtt",
   "custom broker settings must not be overwritten"
+);
+
+assert.equal(
+  hasChannelStructureChange({ enabled: false, set_voltage: 12, set_current: 1 }, { enabled: true, set_voltage: 12, set_current: 1 }),
+  true,
+  "channel enabled changes must trigger a dashboard rerender"
+);
+assert.equal(
+  hasChannelStructureChange({ enabled: true, set_voltage: 12, set_current: 1 }, { enabled: true, set_voltage: 13.7, set_current: 1 }),
+  true,
+  "setpoint changes must trigger a dashboard rerender"
+);
+assert.equal(
+  hasChannelStructureChange({ enabled: true, set_voltage: 12, set_current: 1, actual_voltage: 11.9 }, { enabled: true, set_voltage: 12, set_current: 1, actual_voltage: 12.1 }),
+  false,
+  "fast-changing actual measurements should not force a full rerender"
 );
 
 console.log("protocol tests passed");
