@@ -4,31 +4,22 @@
 // 订阅 4 个节点 + system + voice + aggregate，汇总为统一数据帧。
 // =============================================================================
 
+import { DEFAULT_MQTT_CONFIG, MQTT_PREFIX, commandTopic, normalizeMqttConfig, topic } from "./protocol.js";
+
 // ---- helpers ----------------------------------------------------------------
 
 const MQTT_CONFIG_KEY = "energy-dashboard-mqtt-config";
-const DEFAULT_MQTT = {
-  brokerUrl: "ws://192.168.137.1:8083/mqtt",
-  deviceId: "rk3506",
-  username: "",
-  password: "",
-};
 
 function loadMqttConfig() {
   let cfg = {};
   try { cfg = JSON.parse(localStorage.getItem(MQTT_CONFIG_KEY) || "null") || {}; }
   catch { cfg = {}; }
-  return {
-    brokerUrl: cfg.brokerUrl || localStorage.getItem("mqtt_broker") || DEFAULT_MQTT.brokerUrl,
-    deviceId: cfg.deviceId || localStorage.getItem("mqtt_device_id") || DEFAULT_MQTT.deviceId,
-    username: cfg.username ?? localStorage.getItem("mqtt_username") ?? DEFAULT_MQTT.username,
-    password: cfg.password ?? localStorage.getItem("mqtt_password") ?? DEFAULT_MQTT.password,
-  };
-}
-
-function t(base, path) {
-  const b = base.replace(/\/$/, "");
-  return `${b}/${path.replace(/^\//, "")}`;
+  return normalizeMqttConfig({
+    brokerUrl: cfg.brokerUrl || localStorage.getItem("mqtt_broker") || DEFAULT_MQTT_CONFIG.brokerUrl,
+    deviceId: cfg.deviceId || localStorage.getItem("mqtt_device_id") || DEFAULT_MQTT_CONFIG.deviceId,
+    username: cfg.username ?? localStorage.getItem("mqtt_username") ?? DEFAULT_MQTT_CONFIG.username,
+    password: cfg.password ?? localStorage.getItem("mqtt_password") ?? DEFAULT_MQTT_CONFIG.password,
+  });
 }
 
 // ---- 空数据帧 ----------------------------------------------------------------
@@ -107,7 +98,7 @@ function normalizeSystem(raw) {
 export function createMQTTSource() {
   let client = null;
   let deviceId = "";
-  let prefix = "energy";
+  let prefix = MQTT_PREFIX;
   let reconnectTimer = null;
   let reconnectAttempt = 0;
   let started = false;
@@ -144,7 +135,7 @@ export function createMQTTSource() {
     try { obj = JSON.parse(payloadStr); } catch (_) { return; }
     if (!obj || typeof obj !== "object") return;
 
-    const rel = topic.replace(t(prefix, deviceId) + "/", "");
+    const rel = topic.replace(`${topicBase()}/`, "");
 
     if (rel === "mppt/telemetry") {
       cache.mppt = normalizeMPPT(obj);
@@ -177,7 +168,7 @@ export function createMQTTSource() {
 
     reportStatus("connecting");
 
-    const base = t(prefix, deviceId);
+    const base = topicBase();
     topics = [
       `${base}/mppt/telemetry`,
       `${base}/channel/a/telemetry`,
@@ -252,8 +243,8 @@ export function createMQTTSource() {
   return {
     start(id, pfx) {
       const cfg = loadMqttConfig();
-      deviceId = id || cfg.deviceId || DEFAULT_MQTT.deviceId;
-      prefix   = pfx || "energy";
+      deviceId = id || cfg.deviceId || DEFAULT_MQTT_CONFIG.deviceId;
+      prefix   = pfx || MQTT_PREFIX;
       started  = true;
       disconnect();
       connect();
@@ -267,12 +258,7 @@ export function createMQTTSource() {
         console.warn("[mqtt] sendCommand ignored — not connected");
         return;
       }
-      const base = t(prefix, deviceId);
-      let cmdTopic;
-      if (node === "system") cmdTopic = `${base}/system/command`;
-      else if (node === "mppt") cmdTopic = `${base}/mppt/command`;
-      else if (node.startsWith("channel_")) cmdTopic = `${base}/${node.replace("_", "/")}/command`;
-      else cmdTopic = `${base}/${node}/command`;
+      const cmdTopic = commandTopic(prefix, deviceId, node);
 
       client.publish(cmdTopic, JSON.stringify(cmd), { qos: 1 });
     },
@@ -282,4 +268,8 @@ export function createMQTTSource() {
     getTopics() { return [...topics]; },
     getCache() { return buildFrame(); },
   };
+
+  function topicBase() {
+    return topic(prefix, deviceId, "");
+  }
 }

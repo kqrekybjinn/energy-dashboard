@@ -1,4 +1,4 @@
-const CACHE_NAME = "energy-dashboard-v3";
+const CACHE_NAME = "energy-dashboard-v4";
 const CORE_ASSETS = [
   "./",
   "./index.html",
@@ -7,6 +7,7 @@ const CORE_ASSETS = [
   "./cloud.js",
   "./config.js",
   "./mqtt-source.js",
+  "./protocol.js",
   "./manifest.webmanifest",
 ];
 

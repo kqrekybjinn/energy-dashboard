@@ -1,21 +1,23 @@
 import { cloud, CLOUD_API_VERSION } from "./cloud.js";
 import { createMQTTSource } from "./mqtt-source.js";
+import { DEFAULT_MQTT_CONFIG, normalizeMqttConfig } from "./protocol.js";
 
 const DB_NAME = "energy-dashboard-db";
 const DB_VERSION = 1;
 const APP_VERSION_KEY = "energy-dashboard-app-version";
 const SW_CACHE_PREFIX = "energy-dashboard-";
 const MQTT_CONFIG_KEY = "energy-dashboard-mqtt-config";
-const DEFAULT_MQTT_CONFIG = {
-  brokerUrl: "ws://192.168.137.1:8083/mqtt",
-  deviceId: "rk3506",
-  username: "",
-  password: "",
-};
-
 function loadMqttConfig() {
-  try { return JSON.parse(localStorage.getItem(MQTT_CONFIG_KEY) || "null") || {}; }
-  catch { return {}; }
+  let cfg = {};
+  try { cfg = JSON.parse(localStorage.getItem(MQTT_CONFIG_KEY) || "null") || {}; }
+  catch { cfg = {}; }
+  cfg = {
+    brokerUrl: cfg.brokerUrl || localStorage.getItem("mqtt_broker") || DEFAULT_MQTT_CONFIG.brokerUrl,
+    deviceId: cfg.deviceId || localStorage.getItem("mqtt_device_id") || DEFAULT_MQTT_CONFIG.deviceId,
+    username: cfg.username ?? localStorage.getItem("mqtt_username") ?? DEFAULT_MQTT_CONFIG.username,
+    password: cfg.password ?? localStorage.getItem("mqtt_password") ?? DEFAULT_MQTT_CONFIG.password,
+  };
+  return normalizeMqttConfig(cfg);
 }
 function saveMqttConfig(cfg) {
   localStorage.setItem(MQTT_CONFIG_KEY, JSON.stringify(cfg));
@@ -620,10 +622,9 @@ async function toggleDeviceConnection() {
 function toggleStreaming() {
   if (state.streaming) {
     state.streaming = false;
-    if (dataSource) dataSource.stop();
     destroyChart();
     render();
-    showToast("已停止采集");
+    showToast("已停止记录，实时数据继续更新");
     return;
   }
 
@@ -641,9 +642,8 @@ function toggleStreaming() {
   state.nodeSeries = { mppt:[], channel_a:[], channel_b:[], channel_c:[] };
   state.channels = defaultChannels();
   state.rawLines = [];
-  dataSource.start(state.mqtt.deviceId);
   render();
-  showToast("开始采集数据");
+  showToast("开始记录波形");
 }
 
 function toggleStreamingSilent() {
@@ -670,36 +670,38 @@ function onDeviceData(frame) {
   if (frame.system)    state.system    = { ...state.system, ...frame.system };
   if (frame.voice)     state.voice     = frame.voice;
 
-  // Push to per-node time series
-  for (const node of ["mppt","channel_a","channel_b","channel_c"]) {
-    const f = frame[node];
-    if (!f) continue;
-    state.nodeSeries[node].push({ ...f });
-    if (state.nodeSeries[node].length > state.sampleCount * 2) {
-      state.nodeSeries[node] = state.nodeSeries[node].slice(-state.sampleCount);
+  if (state.streaming) {
+    // Push to per-node time series
+    for (const node of ["mppt","channel_a","channel_b","channel_c"]) {
+      const f = frame[node];
+      if (!f) continue;
+      state.nodeSeries[node].push({ ...f });
+      if (state.nodeSeries[node].length > state.sampleCount * 2) {
+        state.nodeSeries[node] = state.nodeSeries[node].slice(-state.sampleCount);
+      }
     }
-  }
 
-  // Rebuild chart channels from selected node's series
-  rebuildChannels();
+    // Rebuild chart channels from selected node's series
+    rebuildChannels();
 
-  // Raw log line
-  const series = state.nodeSeries[state.selectedNode];
-  if (series.length) {
-    const last = series[series.length - 1];
-    const cfg = nodeSeriesConfig(state.selectedNode);
-    const rawHtml = cfg.map((c, i) =>
-      `<span style="color:${c.color}">${c.name}:${Number(last[c.key]??0).toFixed(2)}${c.unit}</span>`
-    ).join(" ");
-    state.rawLines.push(rawHtml);
-    if (state.rawLines.length > 200) state.rawLines = state.rawLines.slice(-100);
+    // Raw log line
+    const series = state.nodeSeries[state.selectedNode];
+    if (series.length) {
+      const last = series[series.length - 1];
+      const cfg = nodeSeriesConfig(state.selectedNode);
+      const rawHtml = cfg.map((c, i) =>
+        `<span style="color:${c.color}">${c.name}:${Number(last[c.key]??0).toFixed(2)}${c.unit}</span>`
+      ).join(" ");
+      state.rawLines.push(rawHtml);
+      if (state.rawLines.length > 200) state.rawLines = state.rawLines.slice(-100);
+    }
   }
 
   // Throttled chart + UI update
   if (!chartTimer) {
     chartTimer = requestAnimationFrame(() => {
       chartTimer = null;
-      updateChart();
+      if (state.streaming) updateChart();
       updateLiveDisplays();
     });
   }
