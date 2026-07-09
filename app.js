@@ -81,6 +81,7 @@ let toastTimer = null;
 let dataSource = null;
 let chart = null;
 let chartTimer = null;
+let dashboardRenderPending = false;
 
 boot();
 
@@ -687,6 +688,7 @@ function onDeviceData(frame) {
     (frame.channel_a && hasChannelStructureChange(before.channel_a, state.channel_a)) ||
     (frame.channel_b && hasChannelStructureChange(before.channel_b, state.channel_b)) ||
     (frame.channel_c && hasChannelStructureChange(before.channel_c, state.channel_c));
+  if (needsRerender && state.view === "dashboard") dashboardRenderPending = true;
 
   if (state.streaming) {
     // Push to per-node time series
@@ -719,7 +721,10 @@ function onDeviceData(frame) {
   if (!chartTimer) {
     chartTimer = requestAnimationFrame(() => {
       chartTimer = null;
-      if (needsRerender && state.view === "dashboard") render();
+      if (dashboardRenderPending && state.view === "dashboard") {
+        dashboardRenderPending = false;
+        render();
+      }
       if (state.streaming) updateChart();
       updateLiveDisplays();
     });
@@ -768,9 +773,12 @@ function sendChannelToggle(letter) {
   const ch = state[`channel_${letter}`];
   if (!ch) return;
   const node = `channel_${letter}`;
-  const cmd = { cmd: "set_enabled", value: !ch.enabled };
+  const nextEnabled = !ch.enabled;
+  const cmd = { cmd: "set_enabled", value: nextEnabled };
   if (!sendDeviceCommand(node, cmd)) return;
-  showToast(`通道 ${letter.toUpperCase()}: ${ch.enabled ? "关闭" : "开启"}`);
+  ch.enabled = nextEnabled;
+  render();
+  showToast(`通道 ${letter.toUpperCase()}: ${nextEnabled ? "开启" : "关闭"}`);
 }
 
 function sendChannelSetVoltage(letter) {
@@ -783,6 +791,7 @@ function sendChannelSetVoltage(letter) {
   const cmd = { cmd: "set_voltage", value };
   if (!sendDeviceCommand(node, cmd)) return;
   state[`channel_${letter}`].set_voltage = value;
+  render();
   showToast(`通道 ${letter.toUpperCase()}: 设定 ${value.toFixed(1)}V`);
 }
 
@@ -797,6 +806,7 @@ function sendChannelSetCurrent(letter) {
   if (!sendDeviceCommand(node, cmd)) return;
   state[`channel_${letter}`].set_current = value;
   state[`channel_${letter}`].current_limit = value;
+  render();
   showToast(`通道 ${letter.toUpperCase()}: 限流 ${value.toFixed(1)}A`);
 }
 

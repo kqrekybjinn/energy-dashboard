@@ -1,4 +1,4 @@
-const CACHE_NAME = "energy-dashboard-v6";
+const CACHE_NAME = "energy-dashboard-v7";
 const CORE_ASSETS = [
   "./",
   "./index.html",
